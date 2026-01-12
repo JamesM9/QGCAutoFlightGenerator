@@ -1,0 +1,20 @@
+{
+  "units": "imperial",
+  "theme": "dark",
+  "ground_control_station": "qgroundcontrol",
+  "auto_save": false,
+  "show_faa_maps": false,
+  "show_faa_restrictions": false,
+  "show_faa_notams": false,
+  "show_laanc_grid": false,
+  "show_startup_progress": false,
+  "recent_files": [],
+  "default_altitude": 91.44,
+  "default_interval": 91.44,
+  "default_geofence_buffer": 60.96,
+  "map_default_center": [
+    40.615,
+    -75.387
+  ],
+  "map_default_zoom": 15
+}

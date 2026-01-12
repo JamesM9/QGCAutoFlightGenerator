@@ -1,0 +1,5 @@
+Package: UASFlightGenerator
+Version: 1.0.0
+Architecture: all
+Maintainer: UASOP - JamesM
+Description: A tool for generator small unmanned aircraft system flight routes for specific applications that can be exported for use in QGround Control Software.

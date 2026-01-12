@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Enhanced Flight Planning Map with FAA UAS Facility Maps</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    
+    <!-- QWebChannel JavaScript -->
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #map {
+            width: 100%;
+            height: 100vh;
+        }
+        .coordinate-popup {
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .coordinate-popup .label {
+            font-weight: bold;
+            color: #333;
+        }
+        .coordinate-popup .value {
+            color: #666;
+            font-family: 'Courier New', monospace;
+        }
+        .elevation-info {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #ccc;
+        }
+        .loading {
+            color: #999;
+            font-style: italic;
+        }
+        .error {
+            color: #d32f2f;
+            font-style: italic;
+        }
+        .faa-controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 3px 15px rgba(0,0,0,0.2);
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            max-width: 280px;
+            border: 1px solid #ddd;
+        }
+        .faa-controls h4 {
+            margin: 0 0 10px 0;
+            color: #d32f2f;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+        }
+        .faa-controls h4::before {
+            content: "✈️";
+            margin-right: 8px;
+        }
+        .faa-controls label {
+            display: block;
+            margin: 8px 0;
+            font-size: 11px;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+        .faa-controls label:hover {
+            background-color: #f5f5f5;
+        }
+        .faa-controls input[type="checkbox"] {
+            margin-right: 8px;
+            transform: scale(1.1);
+        }
+        .faa-legend {
+            background: white;
+            padding: 10px;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            font-size: 10px;
+            line-height: 1.4;
+            margin-top: 10px;
+            border: 1px solid #ddd;
+        }
+        .faa-legend h5 {
+            margin: 0 0 8px 0;
+            font-size: 11px;
+            color: #333;
+        }
+        .faa-legend-item {
+            display: flex;
+            align-items: center;
+            margin: 4px 0;
+            padding: 2px;
+        }
+        .faa-legend-color {
+            width: 14px;
+            height: 14px;
+            margin-right: 8px;
+            border: 1px solid #999;
+            border-radius: 2px;
+        }
+        .faa-info-panel {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 3px 15px rgba(0,0,0,0.2);
+            font-family: Arial, sans-serif;
+            font-size: 11px;
+            max-width: 300px;
+            display: none;
+            border: 1px solid #ddd;
+        }
+        .faa-info-panel h4 {
+            margin: 0 0 8px 0;
+            color: #d32f2f;
+            font-size: 13px;
+        }
+        .faa-info-panel p {
+            margin: 4px 0;
+            font-size: 10px;
+        }
+        .faa-warning {
+            color: #d32f2f;
+            font-weight: bold;
+        }
+        .faa-caution {
+            color: #f57c00;
+            font-weight: bold;
+        }
+        .faa-safe {
+            color: #388e3c;
+            font-weight: bold;
+        }
+        .airspace-popup {
+            font-family: Arial, sans-serif;
+            font-size: 11px;
+            line-height: 1.4;
+        }
+        .airspace-popup .airspace-class {
+            font-weight: bold;
+            font-size: 13px;
+            color: #d32f2f;
+            margin-bottom: 5px;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-safe { background-color: #4caf50; }
+        .status-caution { background-color: #ff9800; }
+        .status-warning { background-color: #f44336; }
+        
+        /* Enhanced flight controls */
+        .flight-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 3px 15px rgba(0,0,0,0.2);
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            border: 1px solid #ddd;
+        }
+        .flight-controls button {
+            margin: 3px;
+            padding: 6px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #f8f9fa;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s;
+        }
+        .flight-controls button:hover {
+            background: #e9ecef;
+            border-color: #007bff;
+        }
+        .flight-controls button:disabled {
+            background: #f1f3f4;
+            color: #999;
+            cursor: not-allowed;
+        }
+        .flight-controls button.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <!-- FAA Controls Panel -->
+    <div class="faa-controls">
+        <h4>FAA UAS Facility Maps</h4>
+        <label>
+            <input type="checkbox" id="faa-maps-toggle" onchange="toggleFAAMaps(this.checked)">
+            Show Airspace Boundaries
+        </label>
+        <label>
+            <input type="checkbox" id="faa-restrictions-toggle" onchange="toggleFAARestrictions(this.checked)">
+            Show Flight Restrictions
+        </label>
+        <label>
+            <input type="checkbox" id="faa-notams-toggle" onchange="toggleFAANOTAMs(this.checked)">
+            Show NOTAMs
+        </label>
+        <label>
+            <input type="checkbox" id="laanc-grid-toggle" onchange="toggleLAANCGrid(this.checked)">
+            Show LAANC Grid
+        </label>
+        
+        <div class="faa-legend">
+            <h5>Airspace Classes:</h5>
+            <div class="faa-legend-item">
+                <div class="faa-legend-color" style="background-color: #d32f2f; opacity: 0.6;"></div>
+                Class B (Surface-10,000 ft)
+            </div>
+            <div class="faa-legend-item">
+                <div class="faa-legend-color" style="background-color: #f57c00; opacity: 0.6;"></div>
+                Class C (Surface-4,000 ft)
+            </div>
+            <div class="faa-legend-item">
+                <div class="faa-legend-color" style="background-color: #ff9800; opacity: 0.6;"></div>
+                Class D (Surface-2,500 ft)
+            </div>
+            <div class="faa-legend-item">
+                <div class="faa-legend-color" style="background-color: #4caf50; opacity: 0.6;"></div>
+                Class E (Surface-1,200 ft)
+            </div>
+            <div class="faa-legend-item">
+                <div class="faa-legend-color" style="background-color: #2196f3; opacity: 0.6;"></div>
+                Class G (Uncontrolled)
+            </div>
+            <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">
+                <div class="faa-legend-item">
+                    <div class="faa-legend-color" style="background-color: #ff0000; opacity: 0.8;"></div>
+                    TFR / Restricted
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Flight Controls Panel -->
+    <div class="flight-controls">
+        <button onclick="clearRoute()">Clear Route</button>
+        <button onclick="fitBounds()">Fit Bounds</button>
+        <button onclick="toggleWaypointMode()" id="waypointToggle">Add Waypoints</button>
+        <button onclick="checkAirspace()">Check Airspace</button>
+    </div>
+    
+    <!-- FAA Info Panel -->
+    <div class="faa-info-panel" id="faa-info-panel">
+        <h4>FAA Airspace Information</h4>
+        <div id="faa-info-content"></div>
+    </div>
+
+    <script>
+        // Global variables
+        let map;
+        let waypointMarkers = [];
+        let flightPath;
+        let takeoffMarker;
+        let landingMarker;
+        let faaMapsEnabled = false;
+        let faaRestrictionsEnabled = false;
+        let faaNOTAMsEnabled = false;
+        let laancGridEnabled = false;
+        let faaLayers = {};
+        let faaInfoLayer;
+        let currentFaaInfo = null;
+        let waypointMode = false;
+        let mapObject = null;
+        
+        // Initialize map
+        function initMap() {
+            // Create map centered on US
+            map = L.map('map').setView([39.8283, -98.5795], 5);
+            
+            // Base tile layers
+            let openStreetMapLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            });
+            
+            let cartoPositronLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '© CartoDB'
+            });
+            
+            let satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: '© Esri'
+            });
+            
+            let hybridLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: '© Esri'
+            });
+            
+            let hybridLabelsLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+                attribution: '© Esri'
+            });
+            
+            let terrainLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenTopoMap'
+            });
+            
+            // Create base maps
+            let baseMaps = {
+                "Street": openStreetMapLayer,
+                "Light": cartoPositronLayer,
+                "Satellite": satelliteLayer,
+                "Hybrid": L.layerGroup([hybridLayer, hybridLabelsLayer]),
+                "Terrain": terrainLayer
+            };
+            
+            // Add layer control
+            L.control.layers(baseMaps).addTo(map);
+            
+            // Set default layer
+            satelliteLayer.addTo(map);
+            
+            // Initialize FAA layers
+            initializeFAALayers();
+            
+            // Add click handler
+            map.on('click', onMapClick);
+            
+            // Initialize QWebChannel
+            new QWebChannel(qt.webChannelTransport, function(channel) {
+                mapObject = channel.objects.mapObject;
+            });
+        }
+        
+        // Initialize FAA UAS Facility Map layers
+        function initializeFAALayers() {
+            // Create layer groups for FAA data
+            faaLayers.airspace = L.layerGroup();
+            faaLayers.restrictions = L.layerGroup();
+            faaLayers.notams = L.layerGroup();
+            faaLayers.laancGrid = L.layerGroup();
+            
+            // Create info layer for FAA data
+            faaInfoLayer = L.layerGroup();
+            faaInfoLayer.addTo(map);
+        }
+        
+        // Toggle FAA UAS Facility Maps
+        function toggleFAAMaps(enabled) {
+            faaMapsEnabled = enabled;
+            if (enabled) {
+                loadAirspaceData();
+                faaLayers.airspace.addTo(map);
+            } else {
+                map.removeLayer(faaLayers.airspace);
+                faaLayers.airspace.clearLayers();
+            }
+            
+            // Notify Python
+            if (mapObject && mapObject.faaMapsToggled) {
+                mapObject.faaMapsToggled(enabled);
+            }
+        }
+        
+        // Toggle FAA restrictions
+        function toggleFAARestrictions(enabled) {
+            faaRestrictionsEnabled = enabled;
+            if (enabled) {
+                loadRestrictionData();
+                faaLayers.restrictions.addTo(map);
+            } else {
+                map.removeLayer(faaLayers.restrictions);
+                faaLayers.restrictions.clearLayers();
+            }
+        }
+        
+        // Toggle FAA NOTAMs
+        function toggleFAANOTAMs(enabled) {
+            faaNOTAMsEnabled = enabled;
+            if (enabled) {
+                loadNOTAMData();
+                faaLayers.notams.addTo(map);
+            } else {
+                map.removeLayer(faaLayers.notams);
+                faaLayers.notams.clearLayers();
+            }
+        }
+        
+        // Toggle LAANC Grid
+        function toggleLAANCGrid(enabled) {
+            laancGridEnabled = enabled;
+            if (enabled) {
+                loadLAANCGrid();
+                faaLayers.laancGrid.addTo(map);
+            } else {
+                map.removeLayer(faaLayers.laancGrid);
+                faaLayers.laancGrid.clearLayers();
+            }
+        }
+        
+        // Load airspace data
+        function loadAirspaceData() {
+            // Sample airspace data - in production, this would come from FAA APIs
+            const sampleAirspace = [
+                {
+                    type: 'Class B',
+                    center: [40.7128, -74.0060],
+                    radius: 30000, // meters
+                    color: '#d32f2f',
+                    opacity: 0.3
+                },
+                {
+                    type: 'Class C',
+                    center: [34.0522, -118.2437],
+                    radius: 20000,
+                    color: '#f57c00',
+                    opacity: 0.3
+                },
+                {
+                    type: 'Class D',
+                    center: [41.8781, -87.6298],
+                    radius: 8000,
+                    color: '#ff9800',
+                    opacity: 0.3
+                }
+            ];
+            
+            sampleAirspace.forEach(airspace => {
+                const circle = L.circle(airspace.center, {
+                    radius: airspace.radius,
+                    color: airspace.color,
+                    fillColor: airspace.color,
+                    fillOpacity: airspace.opacity,
+                    weight: 2
+                });
+                
+                circle.bindPopup(createAirspacePopup(airspace));
+                faaLayers.airspace.addLayer(circle);
+            });
+        }
+        
+        // Load restriction data
+        function loadRestrictionData() {
+            // Sample TFR data
+            const sampleRestrictions = [
+                {
+                    id: 'TFR_001',
+                    type: 'TFR',
+                    center: [40.7589, -73.9851],
+                    radius: 5000,
+                    reason: 'Security TFR'
+                },
+                {
+                    id: 'TFR_002',
+                    type: 'TFR',
+                    center: [38.8951, -77.0364],
+                    radius: 24000,
+                    reason: 'National Defense Airspace'
+                }
+            ];
+            
+            sampleRestrictions.forEach(restriction => {
+                const circle = L.circle(restriction.center, {
+                    radius: restriction.radius,
+                    color: '#ff0000',
+                    fillColor: '#ff0000',
+                    fillOpacity: 0.4,
+                    weight: 3,
+                    dashArray: '10, 5'
+                });
+                
+                circle.bindPopup(`
+                    <div class="airspace-popup">
+                        <div class="airspace-class">${restriction.type}</div>
+                        <strong>ID:</strong> ${restriction.id}<br>
+                        <strong>Reason:</strong> ${restriction.reason}<br>
+                        <span class="faa-warning">⚠️ FLIGHT PROHIBITED</span>
+                    </div>
+                `);
+                
+                faaLayers.restrictions.addLayer(circle);
+            });
+        }
+        
+        // Load NOTAM data
+        function loadNOTAMData() {
+            const sampleNOTAMs = [
+                {
+                    id: 'NOTAM_001',
+                    location: [40.6892, -74.1745],
+                    message: 'UAS operations prohibited within 3nm radius',
+                    affects_uas: true
+                },
+                {
+                    id: 'NOTAM_002',
+                    location: [34.0522, -118.2437],
+                    message: 'Temporary runway closure - affects departure/arrival patterns',
+                    affects_uas: false
+                }
+            ];
+            
+            sampleNOTAMs.forEach(notam => {
+                const icon = L.divIcon({
+                    className: 'notam-marker',
+                    html: notam.affects_uas ? 
+                        '<div style="background: #ff5722; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; border: 2px solid white;">!</div>' :
+                        '<div style="background: #2196f3; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 10px; border: 2px solid white;">i</div>',
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 12]
+                });
+                
+                const marker = L.marker(notam.location, {icon: icon});
+                marker.bindPopup(`
+                    <div class="airspace-popup">
+                        <div class="airspace-class">NOTAM</div>
+                        <strong>ID:</strong> ${notam.id}<br>
+                        <strong>Message:</strong> ${notam.message}<br>
+                        <strong>Affects UAS:</strong> ${notam.affects_uas ? 
+                            '<span class="faa-warning">Yes</span>' : 
+                            '<span class="faa-safe">No</span>'}
+                    </div>
+                `);
+                
+                faaLayers.notams.addLayer(marker);
+            });
+        }
+        
+        // Load LAANC Grid
+        function loadLAANCGrid() {
+            // Sample LAANC grid data - simplified
+            const gridSize = 0.01; // degrees
+            const bounds = map.getBounds();
+            
+            for (let lat = Math.floor(bounds.getSouth() / gridSize) * gridSize; 
+                 lat <= bounds.getNorth(); 
+                 lat += gridSize) {
+                for (let lng = Math.floor(bounds.getWest() / gridSize) * gridSize; 
+                     lng <= bounds.getEast(); 
+                     lng += gridSize) {
+                    
+                    // Simulate LAANC altitude data
+                    const maxAlt = getLAANCGridAltitude(lat, lng);
+                    const color = getLAANCColor(maxAlt);
+                    
+                    const rectangle = L.rectangle(
+                        [[lat, lng], [lat + gridSize, lng + gridSize]], {
+                            color: color,
+                            fillColor: color,
+                            fillOpacity: 0.2,
+                            weight: 1
+                        }
+                    );
+                    
+                    rectangle.bindPopup(`
+                        <div class="airspace-popup">
+                            <div class="airspace-class">LAANC Grid</div>
+                            <strong>Max Altitude:</strong> ${maxAlt} ft<br>
+                            <strong>Authorization:</strong> ${maxAlt < 400 ? 'Required' : 'Not Required'}
+                        </div>
+                    `);
+                    
+                    faaLayers.laancGrid.addLayer(rectangle);
+                }
+            }
+        }
+        
+        // Get LAANC grid altitude for location
+        function getLAANCGridAltitude(lat, lng) {
+            // Simplified simulation
+            const hash = Math.abs(Math.sin(lat * 1000) * Math.cos(lng * 1000));
+            if (hash < 0.2) return 0;
+            if (hash < 0.4) return 100;
+            if (hash < 0.6) return 200;
+            if (hash < 0.8) return 300;
+            return 400;
+        }
+        
+        // Get LAANC color based on altitude
+        function getLAANCColor(altitude) {
+            if (altitude === 0) return '#ff0000';
+            if (altitude <= 100) return '#ff8a00';
+            if (altitude <= 200) return '#ffd600';
+            if (altitude <= 300) return '#8bc34a';
+            return '#4caf50';
+        }
+        
+        // Create airspace popup content
+        function createAirspacePopup(airspace) {
+            const status = airspace.type === 'Class B' || airspace.type === 'Class C' ? 
+                'Authorization Required' : 'Restricted Operations';
+            const statusClass = airspace.type === 'Class G' ? 'faa-safe' : 'faa-caution';
+            
+            return `
+                <div class="airspace-popup">
+                    <div class="airspace-class">${airspace.type} Airspace</div>
+                    <strong>Status:</strong> <span class="${statusClass}">${status}</span><br>
+                    <strong>Requirements:</strong> ${getAirspaceRequirements(airspace.type)}
+                </div>
+            `;
+        }
+        
+        // Get airspace requirements
+        function getAirspaceRequirements(type) {
+            const requirements = {
+                'Class B': 'ATC clearance, Mode C transponder',
+                'Class C': 'Two-way radio, Mode C transponder',
+                'Class D': 'Two-way radio communication',
+                'Class E': 'No specific requirements',
+                'Class G': 'No ATC control'
+            };
+            return requirements[type] || 'See current regulations';
+        }
+        
+        // Get FAA airspace information for a location
+        function getFAAAirspaceInfo(lat, lng) {
+            // Query Python backend for airspace info
+            if (mapObject && mapObject.getFAAAirspaceInfo) {
+                mapObject.getFAAAirspaceInfo(lat, lng).then(function(data) {
+                    showFAAInfoPanel(data);
+                });
+            } else {
+                // Fallback simulation
+                const simData = simulateFAAQuery(lat, lng);
+                showFAAInfoPanel(simData);
+            }
+        }
+        
+        // Show FAA info panel
+        function showFAAInfoPanel(airspaceInfo) {
+            const panel = document.getElementById('faa-info-panel');
+            const content = document.getElementById('faa-info-content');
+            
+            let statusClass = 'faa-safe';
+            let statusText = 'Safe for UAS Operations';
+            let statusIcon = '✅';
+            
+            if (airspaceInfo.tfr_active) {
+                statusClass = 'faa-warning';
+                statusText = 'TFR ACTIVE - FLIGHT PROHIBITED';
+                statusIcon = '🚫';
+            } else if (airspaceInfo.authorization_required) {
+                statusClass = 'faa-caution';
+                statusText = 'Authorization Required';
+                statusIcon = '⚠️';
+            }
+            
+            content.innerHTML = `
+                <p><strong>Airspace Class:</strong> ${airspaceInfo.airspace_class}</p>
+                <p><strong>Max Altitude:</strong> ${airspaceInfo.max_altitude_ft}</p>
+                <p><strong>Restrictions:</strong> ${airspaceInfo.restrictions}</p>
+                <p class="${statusClass}">${statusIcon} ${statusText}</p>
+                ${airspaceInfo.authorization_required ? 
+                    '<p><small>💡 Consider using LAANC for authorization</small></p>' : ''}
+            `;
+            
+            panel.style.display = 'block';
+            
+            // Auto-hide after 10 seconds
+            setTimeout(() => {
+                panel.style.display = 'none';
+            }, 10000);
+        }
+        
+        // Map click handler
+        function onMapClick(e) {
+            const lat = e.latlng.lat;
+            const lng = e.latlng.lng;
+            
+            if (waypointMode) {
+                addWaypoint(lat, lng);
+            } else {
+                // Get elevation and FAA data
+                getElevationData(lat, lng);
+                if (faaMapsEnabled) {
+                    getFAAAirspaceInfo(lat, lng);
+                }
+            }
+            
+            // Notify Python
+            if (mapObject && mapObject.onMapClick) {
+                mapObject.onMapClick(lat, lng);
+            }
+        }
+        
+        // Waypoint functions
+        function toggleWaypointMode() {
+            waypointMode = !waypointMode;
+            const button = document.getElementById('waypointToggle');
+            button.textContent = waypointMode ? 'Exit Waypoint Mode' : 'Add Waypoints';
+            button.className = waypointMode ? 'active' : '';
+            
+            map.getContainer().style.cursor = waypointMode ? 'crosshair' : '';
+        }
+        
+        function addWaypoint(lat, lng, type = 'waypoint') {
+            const waypoint = {
+                lat: lat,
+                lng: lng,
+                type: type
+            };
+            
+            const icon = L.divIcon({
+                className: 'waypoint-marker',
+                html: `<div style="background: #4CAF50; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; border: 2px solid white;">${waypointMarkers.length + 1}</div>`,
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+            });
+            
+            const marker = L.marker([lat, lng], {icon: icon})
+                .addTo(map)
+                .bindPopup(`Waypoint ${waypointMarkers.length + 1}<br>Lat: ${lat.toFixed(6)}<br>Lng: ${lng.toFixed(6)}`);
+            
+            waypointMarkers.push(marker);
+            updateFlightPath();
+            
+            // Notify Python
+            if (mapObject && mapObject.addWaypoint) {
+                mapObject.addWaypoint(lat, lng, type);
+            }
+        }
+        
+        function updateFlightPath() {
+            if (flightPath) {
+                map.removeLayer(flightPath);
+            }
+            
+            if (waypointMarkers.length > 1) {
+                const coords = waypointMarkers.map(marker => marker.getLatLng());
+                flightPath = L.polyline(coords, {
+                    color: 'red',
+                    weight: 3,
+                    opacity: 0.8,
+                    dashArray: '10, 5'
+                }).addTo(map);
+            }
+        }
+        
+        function clearRoute() {
+            waypointMarkers.forEach(marker => map.removeLayer(marker));
+            waypointMarkers = [];
+            
+            if (flightPath) {
+                map.removeLayer(flightPath);
+                flightPath = null;
+            }
+            
+            if (takeoffMarker) {
+                map.removeLayer(takeoffMarker);
+                takeoffMarker = null;
+            }
+            
+            if (landingMarker) {
+                map.removeLayer(landingMarker);
+                landingMarker = null;
+            }
+            
+            // Clear FAA info panel
+            document.getElementById('faa-info-panel').style.display = 'none';
+        }
+        
+        function fitBounds() {
+            if (waypointMarkers.length > 0) {
+                const group = L.featureGroup(waypointMarkers);
+                map.fitBounds(group.getBounds().pad(0.1));
+            }
+        }
+        
+        function checkAirspace() {
+            if (waypointMarkers.length === 0) {
+                alert('Please add waypoints to check airspace.');
+                return;
+            }
+            
+            const waypoints = waypointMarkers.map(marker => ({
+                lat: marker.getLatLng().lat,
+                lng: marker.getLatLng().lng,
+                altitude: 400 // Default altitude
+            }));
+            
+            // Check with Python backend
+            if (mapObject && mapObject.checkFlightPathAirspace) {
+                mapObject.checkFlightPathAirspace(waypoints);
+            } else {
+                alert('Airspace check complete. No restrictions found for current flight path.');
+            }
+        }
+        
+        // Get elevation data
+        function getElevationData(lat, lng) {
+            if (mapObject && mapObject.getElevationData) {
+                mapObject.getElevationData(lat, lng).then(function(data) {
+                    showCoordinatePopup(lat, lng, data);
+                });
+            }
+        }
+        
+        // Show coordinate popup
+        function showCoordinatePopup(lat, lng, elevationData) {
+            const popup = L.popup()
+                .setLatLng([lat, lng])
+                .setContent(`
+                    <div class="coordinate-popup">
+                        <div class="label">Coordinates:</div>
+                        <div class="value">${lat.toFixed(6)}, ${lng.toFixed(6)}</div>
+                        <div class="elevation-info">
+                            <div class="label">Elevation:</div>
+                            ${elevationData.error ? 
+                                `<div class="error">${elevationData.error}</div>` :
+                                `<div class="value">${elevationData.elevation_m}m (${elevationData.elevation_ft}ft)</div>`
+                            }
+                        </div>
+                    </div>
+                `)
+                .openOn(map);
+        }
+        
+        // Simulate FAA API query (fallback)
+        function simulateFAAQuery(lat, lng) {
+            const airspaceClasses = ['A', 'B', 'C', 'D', 'E', 'G'];
+            const randomClass = airspaceClasses[Math.floor(Math.random() * airspaceClasses.length)];
+            
+            return {
+                airspace_class: randomClass,
+                max_altitude_ft: randomClass === 'G' ? '400 ft' : '1,200 ft',
+                authorization_required: randomClass !== 'G',
+                restrictions: getAirspaceRequirements(`Class ${randomClass}`),
+                tfr_active: false
+            };
+        }
+        
+        // Initialize map when page loads
+        window.onload = initMap;
+    </script>
+</body>
+</html>

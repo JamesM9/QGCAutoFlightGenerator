@@ -1,0 +1,28 @@
+{
+  "Default": {
+    "name": "Default",
+    "email": "",
+    "created_date": "2025-08-27T07:47:06.517244",
+    "last_modified": "2025-08-27T07:47:06.517253",
+    "theme": "dark_blue_teal",
+    "font_size": 12,
+    "animation_speed": "normal",
+    "show_animations": true,
+    "show_tooltips": true,
+    "auto_save_interval": 5,
+    "default_altitude": 100,
+    "default_waypoint_interval": 50,
+    "default_geofence_buffer": 100,
+    "auto_terrain_check": true,
+    "show_safety_warnings": true,
+    "confirm_dangerous_operations": true,
+    "map_quality": "high",
+    "cache_size_limit": 500,
+    "auto_cleanup_cache": true,
+    "background_processing": true,
+    "high_contrast_mode": false,
+    "large_text_mode": false,
+    "keyboard_shortcuts_enabled": true,
+    "screen_reader_support": false
+  }
+}

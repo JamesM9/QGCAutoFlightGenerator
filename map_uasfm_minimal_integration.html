@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Map with UASFM Integration</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    
+    <!-- UASFM Module -->
+    <script src="uasfm.js"></script>
+    
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { width: 100%; height: 100vh; }
+        
+        /* Custom popup styles */
+        .uasfm-popup {
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .uasfm-popup h4 {
+            margin: 0 0 8px 0;
+            color: #333;
+            font-size: 14px;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 4px;
+        }
+        .uasfm-popup .info-row {
+            margin: 4px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        .uasfm-popup .label {
+            font-weight: bold;
+            color: #555;
+        }
+        .uasfm-popup .value {
+            color: #333;
+            font-family: 'Courier New', monospace;
+        }
+        .uasfm-popup .warning {
+            margin-top: 8px;
+            padding: 6px;
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <script>
+        // ===== YOUR EXISTING MAP CODE =====
+        var map = L.map('map').setView([37.7749, -122.4194], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+        
+        // ===== UASFM INTEGRATION CODE =====
+        
+        // UASFM variables
+        var uasfmManager = null;
+        var uasfmLayer = null;
+        
+        // Color function for altitude-based styling
+        function getAltitudeColor(altitude) {
+            if (altitude <= 100) return '#28a745';      // Green for 0-100ft
+            else if (altitude <= 200) return '#ffc107'; // Yellow for 101-200ft
+            else if (altitude <= 300) return '#fd7e14'; // Orange for 201-300ft
+            else if (altitude <= 400) return '#dc3545'; // Red for 301-400ft
+            else return '#6f42c1';                      // Purple for >400ft
+        }
+        
+        // Style function for GeoJSON features
+        function styleUASFMFeature(feature) {
+            const altitude = feature.properties.maxAltitude || 400;
+            return {
+                fillColor: getAltitudeColor(altitude),
+                weight: 1,
+                opacity: 0.8,
+                color: '#333',
+                fillOpacity: 0.5  // Semi-transparent as requested
+            };
+        }
+        
+        // Create popup content
+        function createUASFMPopup(feature) {
+            const props = feature.properties;
+            const altitude = props.maxAltitude || 400;
+            const gridId = props.gridId || props.id || 'Unknown';
+            const airspaceClass = props.airspaceClass || props.AIRSPACE_CLASS || 'Unknown';
+            
+            return `
+                <div class="uasfm-popup">
+                    <h4>🛩️ UAS Facility Map</h4>
+                    <div class="info-row">
+                        <span class="label">Grid ID:</span>
+                        <span class="value">${gridId}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Max Altitude:</span>
+                        <span class="value">${altitude} ft AGL</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Airspace Class:</span>
+                        <span class="value">${airspaceClass}</span>
+                    </div>
+                    <div class="warning">
+                        ⚠️ <strong>Important:</strong> This is informational data only. 
+                        Obtain LAANC authorization before flying in controlled airspace.
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Initialize UASFM
+        function initUASFM() {
+            if (typeof UASFMManager !== 'undefined') {
+                uasfmManager = new UASFMManager({
+                    apiEndpoint: 'https://udds-faa.opendata.arcgis.com/datasets/UASFacilityMaps.geojson',
+                    updateInterval: 56 * 24 * 60 * 60 * 1000 // 56 days
+                });
+                
+                // Set up event listeners
+                uasfmManager.on('initialized', () => {
+                    console.log('UASFM: Ready to use');
+                    loadUASFMLayer(); // Load data on initialization
+                });
+                
+                uasfmManager.on('dataUpdated', (data) => {
+                    console.log(`UASFM: Updated with ${data.features.length} grids`);
+                    loadUASFMLayer();
+                });
+                
+                uasfmManager.on('usingCachedData', () => {
+                    console.log('UASFM: Using cached data');
+                    loadUASFMLayer();
+                });
+                
+                uasfmManager.on('error', (error) => {
+                    console.error('UASFM Error:', error);
+                });
+                
+            } else {
+                setTimeout(initUASFM, 100);
+            }
+        }
+        
+        // Load UASFM data and create layer
+        async function loadUASFMLayer() {
+            try {
+                if (!uasfmManager || !uasfmManager.isInitialized) {
+                    console.error('UASFM manager not ready');
+                    return;
+                }
+                
+                // Get current map bounds
+                const bounds = map.getBounds();
+                const mapBounds = {
+                    north: bounds.getNorth(),
+                    south: bounds.getSouth(),
+                    east: bounds.getEast(),
+                    west: bounds.getWest()
+                };
+                
+                // Fetch UASFM data for current view
+                const features = await uasfmManager.getDataForBounds(mapBounds, {
+                    includeGeometry: true,
+                    maxAltitude: 400
+                });
+                
+                if (features.length === 0) {
+                    console.log('No UASFM data available for current view');
+                    return;
+                }
+                
+                // Create GeoJSON object
+                const geojsonData = {
+                    type: 'FeatureCollection',
+                    features: features.map(feature => ({
+                        type: 'Feature',
+                        geometry: feature.geometry,
+                        properties: {
+                            ...feature.properties,
+                            maxAltitude: feature.maxAltitude,
+                            gridId: feature.id
+                        }
+                    }))
+                };
+                
+                // Remove existing layer if present
+                if (uasfmLayer) {
+                    map.removeLayer(uasfmLayer);
+                }
+                
+                // Create new GeoJSON layer
+                uasfmLayer = L.geoJSON(geojsonData, {
+                    style: styleUASFMFeature,
+                    onEachFeature: function(feature, layer) {
+                        // Add popup
+                        layer.bindPopup(createUASFMPopup(feature));
+                        
+                        // Add hover effects
+                        layer.on('mouseover', function() {
+                            layer.setStyle({
+                                weight: 2,
+                                opacity: 1,
+                                fillOpacity: 0.7
+                            });
+                            layer.bringToFront();
+                        });
+                        
+                        layer.on('mouseout', function() {
+                            uasfmLayer.resetStyle(layer);
+                        });
+                    }
+                });
+                
+                // Add layer to map
+                map.addLayer(uasfmLayer);
+                
+                // Create layer control for toggling
+                const overlays = {
+                    'UAS Facility Maps': uasfmLayer
+                };
+                
+                // Add layer control
+                L.control.layers(null, overlays, {
+                    collapsed: false,
+                    position: 'topright'
+                }).addTo(map);
+                
+                console.log(`UASFM: Loaded ${features.length} grid cells`);
+                
+            } catch (error) {
+                console.error('Failed to load UASFM layer:', error);
+            }
+        }
+        
+        // Handle map view changes
+        function onMapViewChanged() {
+            if (uasfmManager && uasfmManager.isInitialized) {
+                // Debounce to avoid too many requests
+                clearTimeout(window.mapChangeTimeout);
+                window.mapChangeTimeout = setTimeout(() => {
+                    loadUASFMLayer();
+                }, 500);
+            }
+        }
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize UASFM
+            initUASFM();
+            
+            // Listen for map view changes
+            map.on('moveend', onMapViewChanged);
+            map.on('zoomend', onMapViewChanged);
+        });
+        
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            if (uasfmManager) {
+                uasfmManager.destroy();
+            }
+        });
+    </script>
+</body>
+</html>

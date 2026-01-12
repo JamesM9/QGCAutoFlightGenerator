@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Flight Planning Map with UAS Facility Maps</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    
+    <!-- UASFM Module -->
+    <script src="uasfm.js"></script>
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        
+        #map {
+            width: 100%;
+            height: 100vh;
+        }
+        
+        /* Custom popup styles */
+        .uasfm-popup {
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        
+        .uasfm-popup h4 {
+            margin: 0 0 8px 0;
+            color: #333;
+            font-size: 14px;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 4px;
+        }
+        
+        .uasfm-popup .info-row {
+            margin: 4px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .uasfm-popup .label {
+            font-weight: bold;
+            color: #555;
+        }
+        
+        .uasfm-popup .value {
+            color: #333;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .uasfm-popup .warning {
+            margin-top: 8px;
+            padding: 6px;
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #856404;
+        }
+        
+        /* Loading indicator */
+        .loading-indicator {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 1000;
+            display: none;
+        }
+        
+        .loading-indicator.show {
+            display: block;
+        }
+        
+        /* Status bar */
+        .status-bar {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 8px 15px;
+            font-size: 12px;
+            z-index: 1000;
+        }
+        
+        .status-bar .status-item {
+            margin-right: 20px;
+            display: inline-block;
+        }
+        
+        .status-bar .status-label {
+            font-weight: bold;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <!-- Loading indicator -->
+    <div id="loading-indicator" class="loading-indicator">
+        <div>🛩️ Loading UAS Facility Maps...</div>
+        <div style="font-size: 11px; margin-top: 5px;">This may take a few moments on first load</div>
+    </div>
+    
+    <!-- Status bar -->
+    <div class="status-bar">
+        <span class="status-item">
+            <span class="status-label">UASFM:</span>
+            <span id="uasfm-status">Initializing...</span>
+        </span>
+        <span class="status-item">
+            <span class="status-label">Grids:</span>
+            <span id="grid-count">0</span>
+        </span>
+        <span class="status-item">
+            <span class="status-label">Last Update:</span>
+            <span id="last-update">Never</span>
+        </span>
+    </div>
+    
+    <script>
+        // Initialize the map
+        var map = L.map('map').setView([37.7749, -122.4194], 13);
+        
+        // Add base tile layer
+        var baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            maxZoom: 19
+        }).addTo(map);
+        
+        // UASFM variables
+        var uasfmManager = null;
+        var uasfmLayer = null;
+        var uasfmData = [];
+        
+        // Color function for altitude-based styling
+        function getAltitudeColor(altitude) {
+            if (altitude <= 100) {
+                return '#28a745'; // Green for 0-100ft
+            } else if (altitude <= 200) {
+                return '#ffc107'; // Yellow for 101-200ft
+            } else if (altitude <= 300) {
+                return '#fd7e14'; // Orange for 201-300ft
+            } else if (altitude <= 400) {
+                return '#dc3545'; // Red for 301-400ft
+            } else {
+                return '#6f42c1'; // Purple for >400ft or restricted
+            }
+        }
+        
+        // Style function for GeoJSON features
+        function styleUASFMFeature(feature) {
+            const altitude = feature.properties.maxAltitude || 400;
+            return {
+                fillColor: getAltitudeColor(altitude),
+                weight: 1,
+                opacity: 0.8,
+                color: '#333',
+                fillOpacity: 0.5
+            };
+        }
+        
+        // Create popup content
+        function createUASFMPopup(feature) {
+            const props = feature.properties;
+            const altitude = props.maxAltitude || 400;
+            const gridId = props.gridId || props.id || 'Unknown';
+            const airspaceClass = props.airspaceClass || props.AIRSPACE_CLASS || 'Unknown';
+            
+            return `
+                <div class="uasfm-popup">
+                    <h4>🛩️ UAS Facility Map</h4>
+                    <div class="info-row">
+                        <span class="label">Grid ID:</span>
+                        <span class="value">${gridId}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Max Altitude:</span>
+                        <span class="value">${altitude} ft AGL</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Airspace Class:</span>
+                        <span class="value">${airspaceClass}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Grid Type:</span>
+                        <span class="value">${props.gridType || 'Standard'}</span>
+                    </div>
+                    ${props.airportName ? `
+                        <div class="info-row">
+                            <span class="label">Airport:</span>
+                            <span class="value">${props.airportName}</span>
+                        </div>
+                    ` : ''}
+                    <div class="warning">
+                        ⚠️ <strong>Important:</strong> This is informational data only. 
+                        Obtain LAANC authorization before flying in controlled airspace.
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Initialize UASFM
+        function initUASFM() {
+            if (typeof UASFMManager !== 'undefined') {
+                uasfmManager = new UASFMManager({
+                    apiEndpoint: 'https://udds-faa.opendata.arcgis.com/datasets/UASFacilityMaps.geojson',
+                    updateInterval: 56 * 24 * 60 * 60 * 1000 // 56 days
+                });
+                
+                // Set up event listeners
+                uasfmManager.on('initialized', () => {
+                    updateStatus('Ready');
+                    console.log('UASFM: Initialized successfully');
+                });
+                
+                uasfmManager.on('loading', () => {
+                    updateStatus('Loading data...');
+                    showLoading(true);
+                });
+                
+                uasfmManager.on('loadingComplete', () => {
+                    showLoading(false);
+                    updateStatus('Data loaded');
+                });
+                
+                uasfmManager.on('dataUpdated', (data) => {
+                    updateStatus(`Updated: ${data.features.length} grids`);
+                    updateGridCount(data.features.length);
+                    updateLastUpdate();
+                    loadUASFMLayer();
+                });
+                
+                uasfmManager.on('usingCachedData', () => {
+                    updateStatus('Using cached data');
+                    loadUASFMLayer();
+                });
+                
+                uasfmManager.on('error', (error) => {
+                    updateStatus(`Error: ${error.message}`);
+                    showLoading(false);
+                    console.error('UASFM Error:', error);
+                });
+                
+            } else {
+                // Retry after a short delay
+                setTimeout(initUASFM, 100);
+            }
+        }
+        
+        // Load UASFM data and create layer
+        async function loadUASFMLayer() {
+            try {
+                if (!uasfmManager || !uasfmManager.isInitialized) {
+                    console.error('UASFM manager not ready');
+                    return;
+                }
+                
+                // Get current map bounds
+                const bounds = map.getBounds();
+                const mapBounds = {
+                    north: bounds.getNorth(),
+                    south: bounds.getSouth(),
+                    east: bounds.getEast(),
+                    west: bounds.getWest()
+                };
+                
+                // Fetch UASFM data for current view
+                const features = await uasfmManager.getDataForBounds(mapBounds, {
+                    includeGeometry: true,
+                    maxAltitude: 400
+                });
+                
+                if (features.length === 0) {
+                    console.log('No UASFM data available for current view');
+                    return;
+                }
+                
+                // Create GeoJSON object
+                const geojsonData = {
+                    type: 'FeatureCollection',
+                    features: features.map(feature => ({
+                        type: 'Feature',
+                        geometry: feature.geometry,
+                        properties: {
+                            ...feature.properties,
+                            maxAltitude: feature.maxAltitude,
+                            gridId: feature.id
+                        }
+                    }))
+                };
+                
+                // Remove existing layer if present
+                if (uasfmLayer) {
+                    map.removeLayer(uasfmLayer);
+                }
+                
+                // Create new GeoJSON layer
+                uasfmLayer = L.geoJSON(geojsonData, {
+                    style: styleUASFMFeature,
+                    onEachFeature: function(feature, layer) {
+                        // Add popup
+                        layer.bindPopup(createUASFMPopup(feature));
+                        
+                        // Add hover effects
+                        layer.on('mouseover', function() {
+                            layer.setStyle({
+                                weight: 2,
+                                opacity: 1,
+                                fillOpacity: 0.7
+                            });
+                            layer.bringToFront();
+                        });
+                        
+                        layer.on('mouseout', function() {
+                            uasfmLayer.resetStyle(layer);
+                        });
+                    }
+                });
+                
+                // Add layer to map
+                map.addLayer(uasfmLayer);
+                
+                // Update layer control
+                updateLayerControl();
+                
+                console.log(`UASFM: Loaded ${features.length} grid cells`);
+                
+            } catch (error) {
+                console.error('Failed to load UASFM layer:', error);
+                updateStatus(`Error loading data: ${error.message}`);
+            }
+        }
+        
+        // Update layer control
+        function updateLayerControl() {
+            // Remove existing control if present
+            if (window.layerControl) {
+                map.removeControl(window.layerControl);
+            }
+            
+            // Create overlay layers object
+            const overlays = {};
+            if (uasfmLayer) {
+                overlays['UAS Facility Maps'] = uasfmLayer;
+            }
+            
+            // Create layer control
+            window.layerControl = L.control.layers(null, overlays, {
+                collapsed: false,
+                position: 'topright'
+            }).addTo(map);
+        }
+        
+        // Update status display
+        function updateStatus(message) {
+            const statusElement = document.getElementById('uasfm-status');
+            if (statusElement) {
+                statusElement.textContent = message;
+            }
+        }
+        
+        // Update grid count
+        function updateGridCount(count) {
+            const countElement = document.getElementById('grid-count');
+            if (countElement) {
+                countElement.textContent = count;
+            }
+        }
+        
+        // Update last update time
+        function updateLastUpdate() {
+            const updateElement = document.getElementById('last-update');
+            if (updateElement) {
+                const now = new Date();
+                updateElement.textContent = now.toLocaleTimeString();
+            }
+        }
+        
+        // Show/hide loading indicator
+        function showLoading(show) {
+            const loadingElement = document.getElementById('loading-indicator');
+            if (loadingElement) {
+                if (show) {
+                    loadingElement.classList.add('show');
+                } else {
+                    loadingElement.classList.remove('show');
+                }
+            }
+        }
+        
+        // Handle map view changes
+        function onMapViewChanged() {
+            if (uasfmManager && uasfmManager.isInitialized) {
+                // Debounce the function to avoid too many requests
+                clearTimeout(window.mapChangeTimeout);
+                window.mapChangeTimeout = setTimeout(() => {
+                    loadUASFMLayer();
+                }, 500);
+            }
+        }
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize UASFM
+            initUASFM();
+            
+            // Listen for map view changes
+            map.on('moveend', onMapViewChanged);
+            map.on('zoomend', onMapViewChanged);
+            
+            // Add keyboard shortcuts
+            document.addEventListener('keydown', (event) => {
+                if (event.ctrlKey || event.metaKey) {
+                    switch (event.key) {
+                        case 'r':
+                            event.preventDefault();
+                            if (uasfmManager) {
+                                uasfmManager.refresh();
+                            }
+                            break;
+                        case 'u':
+                            event.preventDefault();
+                            loadUASFMLayer();
+                            break;
+                    }
+                }
+            });
+        });
+        
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            if (uasfmManager) {
+                uasfmManager.destroy();
+            }
+        });
+        
+        // Add some helpful console messages
+        console.log('Map initialized with UASFM integration');
+        console.log('Keyboard shortcuts:');
+        console.log('  Ctrl+R: Refresh UASFM data');
+        console.log('  Ctrl+U: Reload UASFM layer');
+        console.log('  Use layer control to toggle UASFM overlay');
+    </script>
+</body>
+</html>

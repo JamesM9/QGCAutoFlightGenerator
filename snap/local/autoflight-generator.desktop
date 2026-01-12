@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=AutoFlight Generator
+GenericName=UAS Flight Planner
+Comment=VERSATILE UAS Flight Planning and Mission Generation Tool
+Exec=autoflight-generator %F
+Icon=autoflight-generator
+Terminal=false
+Categories=Science;Education;Geography;
+Keywords=drone;uav;uas;flight;planning;mission;mapping;
+StartupNotify=true
+StartupWMClass=AutoFlightGenerator
+MimeType=application/vnd.google-earth.kml+xml;application/vnd.google-earth.kmz;

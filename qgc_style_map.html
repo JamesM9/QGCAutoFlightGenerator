@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>QGroundControl-Style Flight Planning Map</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    
+    <!-- QWebChannel JavaScript -->
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #map {
+            width: 100%;
+            height: 100vh;
+        }
+        
+        /* QGroundControl-style flight path controls */
+        .qgc-flight-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            min-width: 200px;
+        }
+        
+        .qgc-control-title {
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        
+        .qgc-button {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin: 2px;
+            transition: background-color 0.2s;
+        }
+        
+        .qgc-button:hover {
+            background: #2980b9;
+        }
+        
+        .qgc-button:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+        }
+        
+        .qgc-button.danger {
+            background: #e74c3c;
+        }
+        
+        .qgc-button.danger:hover {
+            background: #c0392b;
+        }
+        
+        .qgc-button.success {
+            background: #27ae60;
+        }
+        
+        .qgc-button.success:hover {
+            background: #229954;
+        }
+        
+        /* QGroundControl-style waypoint markers */
+        .qgc-waypoint {
+            background: #3498db;
+            color: white;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            border: 2px solid white;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+        
+        .qgc-takeoff {
+            background: #27ae60 !important;
+        }
+        
+        .qgc-landing {
+            background: #e74c3c !important;
+        }
+        
+        .qgc-waypoint-path {
+            background: #3498db !important;
+        }
+        
+        /* Mission info panel */
+        .qgc-mission-info {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            font-size: 11px;
+            color: #2c3e50;
+        }
+
+        .coordinate-popup {
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .coordinate-popup .label {
+            font-weight: bold;
+            color: #333;
+        }
+        .coordinate-popup .value {
+            color: #666;
+            font-family: 'Courier New', monospace;
+        }
+        .elevation-info {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #ccc;
+        }
+        .loading {
+            color: #999;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <!-- QGroundControl-style flight controls -->
+    <div class="qgc-flight-controls">
+        <div class="qgc-control-title">Flight Plan Controls</div>
+        <button class="qgc-button success" onclick="loadPlanFile()">📁 Load .plan</button>
+        <button class="qgc-button" onclick="showFlightPath()" id="showPathBtn" disabled>🗺️ Show Path</button>
+        <button class="qgc-button danger" onclick="clearFlightPath()" id="clearPathBtn" disabled>🗑️ Clear</button>
+        <button class="qgc-button" onclick="fitToMission()" id="fitBtn" disabled>🎯 Fit to Mission</button>
+    </div>
+    
+    <!-- Mission info panel -->
+    <div class="qgc-mission-info" id="missionInfo" style="display: none;">
+        <div><strong>Mission Info</strong></div>
+        <div id="missionDetails"></div>
+    </div>
+    
+    <script>
+        // Initialize QWebChannel for communication with PyQt
+        let pywebchannel;
+        new QWebChannel(qt.webChannelTransport, function(channel) {
+            pywebchannel = channel.objects.pywebchannel;
+        });
+        
+        // Initialize map with QGroundControl-style settings
+        const map = L.map('map', {
+            zoomControl: true,
+            attributionControl: true
+        }).setView([40.615, -75.385], 13);
+        
+        // Add base layers
+        const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        });
+        
+        const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: '© Esri'
+        });
+        
+        // Add default layer
+        satelliteLayer.addTo(map);
+        
+        // QGroundControl-style mission data
+        let missionData = {
+            waypoints: [],
+            homePosition: null,
+            missionType: null,
+            totalDistance: 0,
+            estimatedTime: 0
+        };
+        
+        // Mission visualization layers
+        let waypointMarkers = [];
+        let flightPathLayer = null;
+        let directionArrows = [];
+        
+        // QGroundControl-style waypoint types and colors
+        const waypointTypes = {
+            'takeoff': { color: '#27ae60', symbol: 'T', name: 'Takeoff' },
+            'waypoint': { color: '#3498db', symbol: 'W', name: 'Waypoint' },
+            'landing': { color: '#e74c3c', symbol: 'L', name: 'Landing' },
+            'rtl': { color: '#f39c12', symbol: 'R', name: 'Return to Launch' },
+            'loiter': { color: '#9b59b6', symbol: 'O', name: 'Loiter' }
+        };
+        
+        // QGroundControl-style flight plan visualization
+        function visualizeFlightPlan(flightPlanData) {
+            console.log('QGC-Style: Visualizing flight plan', flightPlanData);
+            
+            // Clear existing visualization
+            clearFlightPath();
+            
+            if (!flightPlanData || !flightPlanData.waypoints) {
+                console.error('Invalid flight plan data');
+                return;
+            }
+            
+            // Update mission data
+            missionData.waypoints = flightPlanData.waypoints;
+            missionData.missionType = flightPlanData.mission_type || 'Unknown Mission';
+            missionData.totalDistance = calculateTotalDistance(flightPlanData.waypoints);
+            missionData.estimatedTime = estimateFlightTime(missionData.totalDistance);
+            
+            // Render waypoints with QGroundControl styling
+            renderWaypoints(flightPlanData.waypoints);
+            
+            // Render flight path with QGroundControl styling
+            renderFlightPath(flightPlanData.waypoints);
+            
+            // Update mission info panel
+            updateMissionInfo();
+            
+            // Enable controls
+            document.getElementById('showPathBtn').disabled = false;
+            document.getElementById('clearPathBtn').disabled = false;
+            document.getElementById('fitBtn').disabled = false;
+            
+            // Auto-fit to mission
+            fitToMission();
+            
+            console.log('QGC-Style: Flight plan visualization complete');
+        }
+        
+        // QGroundControl-style waypoint rendering
+        function renderWaypoints(waypoints) {
+            waypoints.forEach((waypoint, index) => {
+                const waypointType = waypoint.type || 'waypoint';
+                const typeInfo = waypointTypes[waypointType] || waypointTypes['waypoint'];
+                
+                // Create QGroundControl-style marker
+                const markerIcon = L.divIcon({
+                    className: 'qgc-waypoint',
+                    html: `<div class="qgc-waypoint qgc-${waypointType}" style="background: ${typeInfo.color};">${typeInfo.symbol}</div>`,
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 12]
+                });
+                
+                // Create QGroundControl-style popup
+                const popupContent = createQGCPopup(waypoint, index, typeInfo);
+                
+                // Add marker to map
+                const marker = L.marker([waypoint.lat, waypoint.lng], { icon: markerIcon })
+                    .addTo(map)
+                    .bindPopup(popupContent);
+                
+                waypointMarkers.push(marker);
+            });
+        }
+        
+        // QGroundControl-style popup creation
+        function createQGCPopup(waypoint, index, typeInfo) {
+            return `
+                <div style="font-family: 'Segoe UI', sans-serif; font-size: 12px;">
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 5px;">${typeInfo.name} ${index + 1}</div>
+                    <div style="color: #7f8c8d; line-height: 1.4;">
+                        <div style="font-family: 'Courier New', monospace; background: #ecf0f1; padding: 2px 4px; border-radius: 2px;">${waypoint.lat.toFixed(6)}, ${waypoint.lng.toFixed(6)}</div>
+                        ${waypoint.altitude ? `<div>Altitude: ${waypoint.altitude} m AGL</div>` : ''}
+                        ${waypoint.amsl_altitude ? `<div>AMSL: ${waypoint.amsl_altitude.toFixed(1)} m</div>` : ''}
+                        ${waypoint.terrain_elevation ? `<div>Terrain: ${waypoint.terrain_elevation.toFixed(1)} m</div>` : ''}
+                    </div>
+                </div>
+            `;
+        }
+        
+        // QGroundControl-style flight path rendering
+        function renderFlightPath(waypoints) {
+            if (waypoints.length < 2) return;
+            
+            // Create main flight path
+            const pathCoords = waypoints.map(wp => [wp.lat, wp.lng]);
+            
+            flightPathLayer = L.polyline(pathCoords, {
+                color: '#3498db',
+                weight: 3,
+                opacity: 0.8,
+                dashArray: '8, 4'
+            }).addTo(map);
+            
+            // Add direction arrows for shorter paths
+            if (waypoints.length <= 10) {
+                addDirectionArrows(pathCoords);
+            }
+        }
+        
+        // Add direction arrows (QGroundControl style)
+        function addDirectionArrows(pathCoords) {
+            for (let i = 0; i < pathCoords.length - 1; i++) {
+                const midLat = (pathCoords[i][0] + pathCoords[i + 1][0]) / 2;
+                const midLng = (pathCoords[i][1] + pathCoords[i + 1][1]) / 2;
+                
+                const arrowIcon = L.divIcon({
+                    className: 'qgc-direction-arrow',
+                    html: '<div style="background: #3498db; color: white; border-radius: 50%; width: 12px; height: 12px; display: flex; align-items: center; justify-content: center; font-size: 8px;">→</div>',
+                    iconSize: [12, 12],
+                    iconAnchor: [6, 6]
+                });
+                
+                const arrow = L.marker([midLat, midLng], { icon: arrowIcon }).addTo(map);
+                directionArrows.push(arrow);
+            }
+        }
+        
+        // Calculate total distance (QGroundControl style)
+        function calculateTotalDistance(waypoints) {
+            let totalDistance = 0;
+            for (let i = 0; i < waypoints.length - 1; i++) {
+                const distance = map.distance(
+                    [waypoints[i].lat, waypoints[i].lng],
+                    [waypoints[i + 1].lat, waypoints[i + 1].lng]
+                );
+                totalDistance += distance;
+            }
+            return totalDistance;
+        }
+        
+        // Estimate flight time (QGroundControl style)
+        function estimateFlightTime(distance) {
+            const avgSpeed = 15; // m/s (typical drone speed)
+            return Math.round(distance / avgSpeed);
+        }
+        
+        // Update mission info panel
+        function updateMissionInfo() {
+            const missionInfo = document.getElementById('missionInfo');
+            const missionDetails = document.getElementById('missionDetails');
+            
+            missionDetails.innerHTML = `
+                <div>Type: ${missionData.missionType}</div>
+                <div>Waypoints: ${missionData.waypoints.length}</div>
+                <div>Distance: ${(missionData.totalDistance / 1000).toFixed(2)} km</div>
+                <div>Est. Time: ${Math.floor(missionData.estimatedTime / 60)}:${(missionData.estimatedTime % 60).toString().padStart(2, '0')}</div>
+            `;
+            
+            missionInfo.style.display = 'block';
+        }
+        
+        // QGroundControl-style controls
+        function showFlightPath() {
+            if (flightPathLayer) {
+                map.addLayer(flightPathLayer);
+            }
+        }
+        
+        function clearFlightPath() {
+            // Remove waypoint markers
+            waypointMarkers.forEach(marker => map.removeLayer(marker));
+            waypointMarkers = [];
+            
+            // Remove flight path
+            if (flightPathLayer) {
+                map.removeLayer(flightPathLayer);
+                flightPathLayer = null;
+            }
+            
+            // Remove direction arrows
+            directionArrows.forEach(arrow => map.removeLayer(arrow));
+            directionArrows = [];
+            
+            // Clear mission data
+            missionData.waypoints = [];
+            missionData.missionType = null;
+            missionData.totalDistance = 0;
+            missionData.estimatedTime = 0;
+            
+            // Hide mission info
+            document.getElementById('missionInfo').style.display = 'none';
+            
+            // Disable controls
+            document.getElementById('showPathBtn').disabled = true;
+            document.getElementById('clearPathBtn').disabled = true;
+            document.getElementById('fitBtn').disabled = true;
+            
+            console.log('QGC-Style: Flight path cleared');
+        }
+        
+        function fitToMission() {
+            if (missionData.waypoints.length === 0) return;
+            
+            const bounds = L.latLngBounds(missionData.waypoints.map(wp => [wp.lat, wp.lng]));
+            map.fitBounds(bounds, { padding: [20, 20] });
+        }
+        
+        function loadPlanFile() {
+            // This would trigger the file dialog in the Python application
+            if (pywebchannel && pywebchannel.loadPlanFile) {
+                pywebchannel.loadPlanFile();
+            } else {
+                console.log('QGC-Style: Load plan file requested');
+            }
+        }
+
+        // Function to get elevation data from API
+        async function getElevation(lat, lng) {
+            try {
+                const response = await fetch(`https://api.opentopodata.org/v1/srtm90m?locations=${lat},${lng}`);
+                const data = await response.json();
+                
+                if (data.results && data.results[0] && data.results[0].elevation !== null) {
+                    return data.results[0].elevation;
+                }
+                return null;
+            } catch (error) {
+                console.error('Error fetching elevation:', error);
+                return null;
+            }
+        }
+
+        // Create popup content with coordinates and elevation
+        function createPopupContent(lat, lng, elevation) {
+            let content = `
+                <div class="coordinate-popup">
+                    <div class="label">Coordinates:</div>
+                    <div class="value">${lat.toFixed(6)}, ${lng.toFixed(6)}</div>
+                    <div class="elevation-info">
+                        <div class="label">Elevation:</div>
+                        <div class="value">${elevation !== null ? elevation + ' meters' : 'Loading...'}</div>
+                    </div>
+                </div>
+            `;
+            return content;
+        }
+        
+        // Export functions for Python communication
+        window.qgcVisualization = {
+            visualizeFlightPlan: visualizeFlightPlan,
+            clearFlightPath: clearFlightPath,
+            fitToMission: fitToMission
+        };
+        
+        // Map click handler for coordinate selection
+        map.on('click', async function(event) {
+            const lat = event.latlng.lat;
+            const lng = event.latlng.lng;
+            
+            // Create initial popup with loading elevation
+            const popup = L.popup()
+                .setLatLng([lat, lng])
+                .setContent(createPopupContent(lat, lng, null))
+                .openOn(map);
+
+            // Send coordinates to Python
+            if (pywebchannel) {
+                if (pywebchannel.setStartLocation) {
+                    pywebchannel.setStartLocation(lat, lng);
+                }
+                if (pywebchannel.setEndLocation) {
+                    pywebchannel.setEndLocation(lat, lng);
+                }
+                if (pywebchannel.receive_takeoff_location) {
+                    pywebchannel.receive_takeoff_location(lat, lng);
+                }
+                if (pywebchannel.receive_landing_location) {
+                    pywebchannel.receive_landing_location(lat, lng);
+                }
+                if (pywebchannel.onClickCoordinates) {
+                    pywebchannel.onClickCoordinates(lat, lng);
+                }
+            }
+
+            // Get elevation data
+            try {
+                const elevation = await getElevation(lat, lng);
+                
+                // Update popup with elevation data
+                popup.setContent(createPopupContent(lat, lng, elevation));
+            } catch (error) {
+                console.error('Error getting elevation:', error);
+                popup.setContent(createPopupContent(lat, lng, 'Error loading elevation'));
+            }
+            
+            console.log('QGC-Style: Map clicked at', lat, lng);
+        });
+        
+        console.log('QGC-Style: Map initialized');
+    </script>
+</body>
+</html>
+

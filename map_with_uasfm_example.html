@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Flight Planning Map with UAS Facility Maps Integration</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    
+    <!-- UASFM Module -->
+    <script src="uasfm.js"></script>
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+        #map {
+            width: 100%;
+            height: 100vh;
+        }
+        
+        /* UASFM Control Panel */
+        .uasfm-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            min-width: 250px;
+            font-family: Arial, sans-serif;
+        }
+        
+        .uasfm-controls h3 {
+            margin: 0 0 15px 0;
+            color: #333;
+            font-size: 16px;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 8px;
+        }
+        
+        .uasfm-controls label {
+            display: block;
+            margin: 8px 0;
+            font-size: 14px;
+            color: #555;
+        }
+        
+        .uasfm-controls input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        
+        .uasfm-controls input[type="range"] {
+            width: 100%;
+            margin: 5px 0;
+        }
+        
+        .uasfm-controls button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin: 5px 5px 5px 0;
+        }
+        
+        .uasfm-controls button:hover {
+            background: #0056b3;
+        }
+        
+        .uasfm-controls button.secondary {
+            background: #6c757d;
+        }
+        
+        .uasfm-controls button.secondary:hover {
+            background: #545b62;
+        }
+        
+        .uasfm-controls button.danger {
+            background: #dc3545;
+        }
+        
+        .uasfm-controls button.danger:hover {
+            background: #c82333;
+        }
+        
+        .uasfm-status {
+            margin-top: 10px;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .uasfm-status.loading {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        
+        .uasfm-status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .uasfm-status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .uasfm-info {
+            margin-top: 10px;
+            font-size: 11px;
+            color: #666;
+            line-height: 1.4;
+        }
+        
+        /* Altitude Legend */
+        .altitude-legend {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+        }
+        
+        .altitude-legend h4 {
+            margin: 0 0 8px 0;
+            color: #333;
+            font-size: 13px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 4px 0;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 12px;
+            border: 1px solid #ccc;
+            margin-right: 8px;
+        }
+        
+        .legend-text {
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <!-- UASFM Control Panel -->
+    <div class="uasfm-controls">
+        <h3>🛩️ UAS Facility Maps</h3>
+        
+        <label>
+            <input type="checkbox" id="uasfm-toggle" onchange="toggleUASFM()">
+            Show UASFM Overlay
+        </label>
+        
+        <label>
+            <input type="checkbox" id="color-by-altitude" checked onchange="updateUASFMOptions()">
+            Color by Altitude
+        </label>
+        
+        <label>
+            <input type="checkbox" id="show-labels" onchange="updateUASFMOptions()">
+            Show Labels
+        </label>
+        
+        <label>
+            Max Altitude: <span id="max-altitude-value">400</span> ft
+            <input type="range" id="max-altitude" min="0" max="400" value="400" onchange="updateMaxAltitude()">
+        </label>
+        
+        <label>
+            Opacity: <span id="opacity-value">60</span>%
+            <input type="range" id="opacity" min="10" max="100" value="60" onchange="updateOpacity()">
+        </label>
+        
+        <div style="margin-top: 10px;">
+            <button onclick="refreshUASFM()">🔄 Refresh Data</button>
+            <button class="secondary" onclick="showCacheStats()">📊 Cache Stats</button>
+            <button class="danger" onclick="clearUASFMCache()">🗑️ Clear Cache</button>
+        </div>
+        
+        <div id="uasfm-status" class="uasfm-status"></div>
+        
+        <div class="uasfm-info">
+            <strong>UAS Facility Maps</strong> show maximum authorized altitudes for drone operations. 
+            Data is automatically updated every 56 days and cached locally for offline use.
+        </div>
+    </div>
+    
+    <!-- Altitude Legend -->
+    <div class="altitude-legend">
+        <h4>Max Altitude (ft AGL)</h4>
+        <div class="legend-item">
+            <div class="legend-color" style="background: hsl(120, 70%, 50%);"></div>
+            <div class="legend-text">0-100 ft</div>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: hsl(90, 70%, 50%);"></div>
+            <div class="legend-text">100-200 ft</div>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: hsl(60, 70%, 50%);"></div>
+            <div class="legend-text">200-300 ft</div>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: hsl(30, 70%, 50%);"></div>
+            <div class="legend-text">300-400 ft</div>
+        </div>
+    </div>
+    
+    <script>
+        // Initialize the map
+        let map = L.map('map').setView([40.615, -75.387], 12);
+        
+        // Add base tile layer
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            maxZoom: 19
+        }).addTo(map);
+        
+        // UASFM variables
+        let uasfmManager = null;
+        let uasfmOverlay = null;
+        let uasfmOptions = {
+            opacity: 0.6,
+            colorByAltitude: true,
+            showLabels: false,
+            maxAltitude: 400,
+            onFeatureClick: handleUASFMClick
+        };
+        
+        // Initialize UASFM when the module is ready
+        function initUASFM() {
+            if (typeof UASFMManager !== 'undefined') {
+                uasfmManager = new UASFMManager({
+                    apiEndpoint: 'https://udds-faa.opendata.arcgis.com/datasets/UASFacilityMaps.geojson',
+                    updateInterval: 56 * 24 * 60 * 60 * 1000 // 56 days
+                });
+                
+                // Set up event listeners
+                uasfmManager.on('initialized', () => {
+                    updateStatus('UASFM initialized successfully', 'success');
+                    console.log('UASFM: Ready to use');
+                });
+                
+                uasfmManager.on('loading', () => {
+                    updateStatus('Loading UASFM data...', 'loading');
+                });
+                
+                uasfmManager.on('loadingComplete', () => {
+                    updateStatus('Data loading complete', 'success');
+                });
+                
+                uasfmManager.on('dataUpdated', (data) => {
+                    updateStatus(`Data updated: ${data.features.length} features loaded`, 'success');
+                    if (uasfmOverlay) {
+                        uasfmOverlay.update();
+                    }
+                });
+                
+                uasfmManager.on('usingCachedData', () => {
+                    updateStatus('Using cached data (offline mode)', 'success');
+                });
+                
+                uasfmManager.on('error', (error) => {
+                    updateStatus(`Error: ${error.message}`, 'error');
+                    console.error('UASFM Error:', error);
+                });
+                
+            } else {
+                // Retry after a short delay
+                setTimeout(initUASFM, 100);
+            }
+        }
+        
+        // Toggle UASFM overlay
+        function toggleUASFM() {
+            const toggle = document.getElementById('uasfm-toggle');
+            
+            if (toggle.checked) {
+                if (uasfmManager && uasfmManager.isInitialized) {
+                    createUASFMOverlay();
+                } else {
+                    updateStatus('UASFM not ready yet, please wait...', 'loading');
+                    toggle.checked = false;
+                }
+            } else {
+                removeUASFMOverlay();
+            }
+        }
+        
+        // Create UASFM overlay
+        function createUASFMOverlay() {
+            if (!uasfmManager || !uasfmManager.isInitialized) {
+                console.error('UASFM manager not ready');
+                return;
+            }
+            
+            try {
+                uasfmOverlay = uasfmManager.createOverlay(map, uasfmOptions);
+                map.addLayer(uasfmOverlay.layer);
+                updateStatus('UASFM overlay added', 'success');
+                console.log('UASFM: Overlay created');
+            } catch (error) {
+                console.error('Failed to create UASFM overlay:', error);
+                updateStatus('Failed to create overlay', 'error');
+            }
+        }
+        
+        // Remove UASFM overlay
+        function removeUASFMOverlay() {
+            if (uasfmOverlay) {
+                uasfmOverlay.remove();
+                uasfmOverlay = null;
+                updateStatus('UASFM overlay removed', 'success');
+                console.log('UASFM: Overlay removed');
+            }
+        }
+        
+        // Update UASFM options
+        function updateUASFMOptions() {
+            uasfmOptions.colorByAltitude = document.getElementById('color-by-altitude').checked;
+            uasfmOptions.showLabels = document.getElementById('show-labels').checked;
+            
+            if (uasfmOverlay) {
+                uasfmOverlay.update();
+            }
+        }
+        
+        // Update max altitude
+        function updateMaxAltitude() {
+            const slider = document.getElementById('max-altitude');
+            const value = document.getElementById('max-altitude-value');
+            const altitude = parseInt(slider.value);
+            
+            value.textContent = altitude;
+            uasfmOptions.maxAltitude = altitude;
+            
+            if (uasfmOverlay) {
+                uasfmOverlay.update();
+            }
+        }
+        
+        // Update opacity
+        function updateOpacity() {
+            const slider = document.getElementById('opacity');
+            const value = document.getElementById('opacity-value');
+            const opacity = parseInt(slider.value) / 100;
+            
+            value.textContent = Math.round(opacity * 100);
+            uasfmOptions.opacity = opacity;
+            
+            if (uasfmOverlay) {
+                uasfmOverlay.update();
+            }
+        }
+        
+        // Refresh UASFM data
+        async function refreshUASFM() {
+            if (!uasfmManager) {
+                updateStatus('UASFM not initialized', 'error');
+                return;
+            }
+            
+            try {
+                updateStatus('Refreshing UASFM data...', 'loading');
+                await uasfmManager.refresh();
+                updateStatus('Data refresh complete', 'success');
+            } catch (error) {
+                updateStatus(`Refresh failed: ${error.message}`, 'error');
+            }
+        }
+        
+        // Show cache statistics
+        async function showCacheStats() {
+            if (!uasfmManager) {
+                updateStatus('UASFM not initialized', 'error');
+                return;
+            }
+            
+            try {
+                const stats = await uasfmManager.getCacheStats();
+                if (stats) {
+                    const age = stats.cacheAge ? Math.round(stats.cacheAge / (24 * 60 * 60 * 1000)) : 0;
+                    updateStatus(`Cache: ${stats.featureCount} features, ${age} days old`, 'success');
+                } else {
+                    updateStatus('No cached data available', 'error');
+                }
+            } catch (error) {
+                updateStatus(`Failed to get cache stats: ${error.message}`, 'error');
+            }
+        }
+        
+        // Clear UASFM cache
+        async function clearUASFMCache() {
+            if (!uasfmManager) {
+                updateStatus('UASFM not initialized', 'error');
+                return;
+            }
+            
+            if (confirm('Are you sure you want to clear the UASFM cache? This will remove all cached data.')) {
+                try {
+                    updateStatus('Clearing cache...', 'loading');
+                    await uasfmManager.clearCache();
+                    updateStatus('Cache cleared successfully', 'success');
+                    
+                    // Remove overlay if active
+                    if (uasfmOverlay) {
+                        removeUASFMOverlay();
+                        document.getElementById('uasfm-toggle').checked = false;
+                    }
+                } catch (error) {
+                    updateStatus(`Failed to clear cache: ${error.message}`, 'error');
+                }
+            }
+        }
+        
+        // Handle UASFM feature clicks
+        function handleUASFMClick(feature, event) {
+            console.log('UASFM Feature clicked:', feature);
+            
+            // You can add custom handling here
+            // For example, show detailed information in a custom popup
+            const popup = L.popup()
+                .setLatLng(event.latlng)
+                .setContent(`
+                    <div style="font-family: Arial, sans-serif; font-size: 14px;">
+                        <h3 style="margin: 0 0 10px 0; color: #333;">UAS Facility Map Details</h3>
+                        <p><strong>Grid ID:</strong> ${feature.id}</p>
+                        <p><strong>Maximum Altitude:</strong> ${feature.maxAltitude} ft AGL</p>
+                        <p><strong>Grid Type:</strong> ${feature.gridType}</p>
+                        <p><strong>Coordinates:</strong> ${event.latlng.lat.toFixed(6)}, ${event.latlng.lng.toFixed(6)}</p>
+                        ${feature.properties.airportName ? `<p><strong>Associated Airport:</strong> ${feature.properties.airportName}</p>` : ''}
+                        <hr style="margin: 10px 0;">
+                        <p style="font-size: 12px; color: #666;">
+                            This altitude limit applies to Part 107 operations. 
+                            Always check for NOTAMs and other restrictions before flying.
+                        </p>
+                    </div>
+                `)
+                .openOn(map);
+        }
+        
+        // Update status display
+        function updateStatus(message, type) {
+            const status = document.getElementById('uasfm-status');
+            status.textContent = message;
+            status.className = `uasfm-status ${type}`;
+            
+            // Auto-clear success messages after 5 seconds
+            if (type === 'success') {
+                setTimeout(() => {
+                    status.textContent = '';
+                    status.className = 'uasfm-status';
+                }, 5000);
+            }
+        }
+        
+        // Map click handler to get altitude at location
+        map.on('click', async function(event) {
+            if (uasfmManager && uasfmManager.isInitialized) {
+                try {
+                    const altitudeInfo = await uasfmManager.getAltitudeAtLocation(event.latlng.lat, event.latlng.lng);
+                    if (altitudeInfo) {
+                        console.log('Altitude at location:', altitudeInfo);
+                        // You can display this information in a popup or status bar
+                    }
+                } catch (error) {
+                    console.error('Failed to get altitude info:', error);
+                }
+            }
+        });
+        
+        // Initialize UASFM when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            initUASFM();
+        });
+        
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            if (uasfmManager) {
+                uasfmManager.destroy();
+            }
+        });
+    </script>
+</body>
+</html>

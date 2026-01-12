@@ -1,0 +1,83 @@
+{
+  "profiles": [
+    {
+      "name": "Generic Multicopter (ArduPilot)",
+      "firmware_type": "ardupilot",
+      "parameters": {
+        "WPNAV_SPEED": 5.0,
+        "WPNAV_ACCEL": 50.0,
+        "WPNAV_RADIUS": 2.0,
+        "PILOT_ALT_MAX": 100.0,
+        "RTL_ALT": 50.0,
+        "WPNAV_LOITER_RAD": 2.0
+      },
+      "aircraft_type": "Multicopter",
+      "description": "Standard multicopter configuration for ArduPilot",
+      "created_date": "2025-09-02T01:11:56.760465",
+      "last_used": "2025-09-06T14:50:42.812273",
+      "last_modified": "2025-09-02T01:11:56.760465",
+      "parameter_file_path": null,
+      "is_default": true
+    },
+    {
+      "name": "Generic Fixed Wing (ArduPilot)",
+      "firmware_type": "ardupilot",
+      "parameters": {
+        "WPNAV_SPEED": 15.0,
+        "WPNAV_ACCEL": 10.0,
+        "WPNAV_RADIUS": 50.0,
+        "PILOT_ALT_MAX": 200.0,
+        "RTL_ALT": 100.0,
+        "WPNAV_LOITER_RAD": 100.0,
+        "ARSPD_FBW_MIN": 8.0,
+        "ARSPD_FBW_MAX": 25.0
+      },
+      "aircraft_type": "Fixed Wing",
+      "description": "Standard fixed wing configuration for ArduPilot",
+      "created_date": "2025-09-02T01:11:56.760465",
+      "last_used": "2025-09-02T01:11:56.760465",
+      "last_modified": "2025-09-02T01:11:56.760465",
+      "parameter_file_path": null,
+      "is_default": true
+    },
+    {
+      "name": "Generic Multicopter (PX4)",
+      "firmware_type": "px4",
+      "parameters": {
+        "MC_XY_CRUISE": 5.0,
+        "MC_XY_VEL_MAX": 8.0,
+        "NAV_MC_ALT_RAD": 2.0,
+        "RTL_RETURN_ALT": 50.0,
+        "RTL_DESCEND_ALT": 30.0
+      },
+      "aircraft_type": "Multicopter",
+      "description": "Standard multicopter configuration for PX4",
+      "created_date": "2025-09-02T01:11:56.760465",
+      "last_used": "2025-09-02T01:11:56.760465",
+      "last_modified": "2025-09-02T01:11:56.760465",
+      "parameter_file_path": null,
+      "is_default": true
+    },
+    {
+      "name": "Generic Fixed Wing (PX4)",
+      "firmware_type": "px4",
+      "parameters": {
+        "FW_AIRSPD_MAX": 25.0,
+        "FW_AIRSPD_MIN": 8.0,
+        "FW_AIRSPD_TRIM": 15.0,
+        "NAV_FW_ALT_RAD": 50.0,
+        "RTL_RETURN_ALT": 100.0,
+        "RTL_DESCEND_ALT": 50.0
+      },
+      "aircraft_type": "Fixed Wing",
+      "description": "Standard fixed wing configuration for PX4",
+      "created_date": "2025-09-02T01:11:56.760465",
+      "last_used": "2025-09-02T01:11:56.760465",
+      "last_modified": "2025-09-02T01:11:56.760465",
+      "parameter_file_path": null,
+      "is_default": true
+    }
+  ],
+  "current_profile": "Generic Multicopter (ArduPilot)",
+  "last_saved": "2025-09-06T14:50:42.812273"
+}

@@ -1,0 +1,841 @@
+
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>OpenStreetMap</title>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            
+            <!-- Leaflet CSS -->
+            <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+                  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+                  crossorigin=""/>
+            
+            <!-- Leaflet JavaScript -->
+            <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+                    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+                    crossorigin=""></script>
+            
+            <!-- QWebChannel JavaScript -->
+            <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+            
+            <style>
+                body {
+                    margin: 0;
+                    padding: 0;
+                }
+                #map {
+                    width: 100%;
+                    height: 100vh;
+                }
+                .coordinate-popup {
+                    font-family: Arial, sans-serif;
+                    font-size: 12px;
+                    line-height: 1.4;
+                }
+                .coordinate-popup .label {
+                    font-weight: bold;
+                    color: #333;
+                }
+                .coordinate-popup .value {
+                    color: #666;
+                    font-family: 'Courier New', monospace;
+                }
+                .elevation-info {
+                    margin-top: 8px;
+                    padding-top: 8px;
+                    border-top: 1px solid #ccc;
+                }
+                .loading {
+                    color: #999;
+                    font-style: italic;
+                }
+                .error {
+                    color: #d32f2f;
+                    font-style: italic;
+                }
+                
+                /* Address Search Styles */
+                .search-container {
+                    position: absolute;
+                    top: 10px;
+                    left: 10px;
+                    z-index: 1000;
+                    background: white;
+                    padding: 10px;
+                    border-radius: 5px;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                    min-width: 300px;
+                }
+                
+                .search-container h4 {
+                    margin: 0 0 10px 0;
+                    color: #333;
+                    font-size: 14px;
+                }
+                
+                .search-input {
+                    width: 100%;
+                    padding: 8px;
+                    border: 1px solid #ccc;
+                    border-radius: 3px;
+                    font-size: 14px;
+                    box-sizing: border-box;
+                }
+                
+                .search-button {
+                    margin-top: 5px;
+                    padding: 8px 12px;
+                    background: #007bff;
+                    color: white;
+                    border: none;
+                    border-radius: 3px;
+                    cursor: pointer;
+                    font-size: 14px;
+                }
+                
+                .search-button:hover {
+                    background: #0056b3;
+                }
+                
+                .search-results {
+                    margin-top: 10px;
+                    max-height: 200px;
+                    overflow-y: auto;
+                    border: 1px solid #ccc;
+                    border-radius: 3px;
+                    background: white;
+                }
+                
+                .search-result-item {
+                    padding: 8px;
+                    border-bottom: 1px solid #eee;
+                    cursor: pointer;
+                    font-size: 12px;
+                }
+                
+                .search-result-item:hover {
+                    background: #f8f9fa;
+                }
+                
+                .search-result-item:last-child {
+                    border-bottom: none;
+                }
+                
+                .search-result-title {
+                    font-weight: bold;
+                    color: #333;
+                }
+                
+                .search-result-address {
+                    color: #666;
+                    font-size: 11px;
+                }
+                
+                .search-result-item.selected {
+                    background: #007bff;
+                    color: white;
+                }
+                
+                .search-result-item.selected .search-result-title,
+                .search-result-item.selected .search-result-address {
+                    color: white;
+                }
+            </style>
+        </head>
+        <body>
+            <div id="map"></div>
+            
+            <!-- Address Search Container -->
+            <div class="search-container">
+                <h4>Search Address</h4>
+                <input type="text" id="search-input" class="search-input" placeholder="Enter address, city, or landmark...">
+                <button id="search-button" class="search-button">Search</button>
+                <div id="search-results" class="search-results" style="display: none;"></div>
+            </div>
+            <script>
+                // Initialize QWebChannel for communication with PyQt
+                let pywebchannel;
+                new QWebChannel(qt.webChannelTransport, function(channel) {
+                    pywebchannel = channel.objects.pywebchannel;
+                    console.log('QWebChannel initialized successfully');
+                    console.log('pywebchannel object:', pywebchannel);
+                    console.log('setStartLocation available:', typeof pywebchannel.setStartLocation);
+                    console.log('setEndLocation available:', typeof pywebchannel.setEndLocation);
+                });
+                
+                // Initialize the map
+                let map = L.map('map').setView([40.615, -75.387], 15);
+                
+                // Add tile layers with updated sources for the most current maps
+                // 1. OpenStreetMap - Latest community-driven street data
+                let openStreetMapLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                    maxZoom: 19
+                });
+                
+                // 2. CartoDB Positron - Clean, modern street map with latest data
+                let cartoPositronLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
+                    subdomains: 'abcd',
+                    maxZoom: 20
+                });
+                
+                // 3. CartoDB Voyager - Enhanced street map with more details and latest updates
+                let cartoVoyagerLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
+                    subdomains: 'abcd',
+                    maxZoom: 20
+                });
+                
+                // 4. High-Resolution Satellite (Esri World Imagery) - Latest satellite imagery
+                let satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+                    maxZoom: 19
+                });
+                
+                // 5. Google Satellite - Alternative high-resolution satellite source
+                let googleSatelliteLayer = L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+                    attribution: '© Google',
+                    maxZoom: 20
+                });
+                
+                // 6. Hybrid layer (Satellite + Labels)
+                let hybridLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+                    maxZoom: 19
+                });
+                
+                // 7. Hybrid labels layer
+                let hybridLabelsLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+                    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+                    maxZoom: 19
+                });
+                
+                // 8. Terrain layer with contours and elevation data
+                let terrainLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+                    attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)',
+                    maxZoom: 17
+                });
+                
+                // Create layer groups with updated options
+                let baseMaps = {
+                    "OpenStreetMap": openStreetMapLayer,
+                    "CartoDB Light": cartoPositronLayer,
+                    "CartoDB Voyager": cartoVoyagerLayer,
+                    "Satellite (Esri)": satelliteLayer,
+                    "Satellite (Google)": googleSatelliteLayer,
+                    "Hybrid": L.layerGroup([hybridLayer, hybridLabelsLayer]),
+                    "Terrain": terrainLayer
+                };
+                
+                // Add layer control
+                L.control.layers(baseMaps).addTo(map);
+                
+                // Set default layer to Satellite (Google)
+                googleSatelliteLayer.addTo(map);
+                
+                // Function to get elevation data
+                async function getElevation(lat, lng) {
+                    try {
+                        // Using Open-Elevation API (free and no API key required)
+                        const response = await fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lng}`);
+                        const data = await response.json();
+                        
+                        if (data.results && data.results.length > 0) {
+                            return data.results[0].elevation;
+                        } else {
+                            throw new Error('No elevation data available');
+                        }
+                    } catch (error) {
+                        console.error('Error fetching elevation:', error);
+                        return null;
+                    }
+                }
+                
+                // Function to format coordinates
+                function formatCoordinates(lat, lng) {
+                    const latDeg = Math.floor(Math.abs(lat));
+                    const latMin = (Math.abs(lat) - latDeg) * 60;
+                    const latSec = (latMin - Math.floor(latMin)) * 60;
+                    const latDir = lat >= 0 ? 'N' : 'S';
+                    
+                    const lngDeg = Math.floor(Math.abs(lng));
+                    const lngMin = (Math.abs(lng) - lngDeg) * 60;
+                    const lngSec = (lngMin - Math.floor(lngMin)) * 60;
+                    const lngDir = lng >= 0 ? 'E' : 'W';
+                    
+                    return {
+                        decimal: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+                        dms: `${latDeg}°${Math.floor(latMin)}'${latSec.toFixed(2)}"${latDir}, ${lngDeg}°${Math.floor(lngMin)}'${lngSec.toFixed(2)}"${lngDir}`
+                    };
+                }
+                
+                // Function to create popup content
+                function createPopupContent(lat, lng, elevation = null) {
+                    const coords = formatCoordinates(lat, lng);
+                    let elevationHtml = '';
+                    
+                    if (elevation !== null) {
+                        elevationHtml = `
+                            <div class="elevation-info">
+                                <div class="label">Elevation:</div>
+                                <div class="value">${elevation.toFixed(1)} meters (${(elevation * 3.28084).toFixed(1)} feet)</div>
+                            </div>
+                        `;
+                    } else if (elevation === null) {
+                        elevationHtml = `
+                            <div class="elevation-info">
+                                <div class="loading">Loading elevation data...</div>
+                            </div>
+                        `;
+                    } else {
+                        elevationHtml = `
+                            <div class="elevation-info">
+                                <div class="error">Elevation data unavailable</div>
+                            </div>
+                        `;
+                    }
+                    
+                    return `
+                        <div class="coordinate-popup">
+                            <div class="label">Decimal Coordinates:</div>
+                            <div class="value">${coords.decimal}</div>
+                            <div class="label">DMS Coordinates:</div>
+                            <div class="value">${coords.dms}</div>
+                            ${elevationHtml}
+                        </div>
+                    `;
+                }
+                
+                // Click listener to get coordinates and elevation
+                map.on('click', async function(event) {
+                    const lat = event.latlng.lat;
+                    const lng = event.latlng.lng;
+                    
+                    // Check if we're in takeoff or landing selection mode
+                    if (window.takeoffSelectionMode) {
+                        // Handle takeoff location selection
+                        setTakeoffLocation(lat, lng);
+                        return;
+                    }
+                    
+                    if (window.landingSelectionMode) {
+                        // Handle landing location selection
+                        setLandingLocation(lat, lng);
+                        return;
+                    }
+                    
+                    // Default behavior: show popup with coordinate information
+                    // Create initial popup with loading elevation
+                    const popup = L.popup()
+                        .setLatLng([lat, lng])
+                        .setContent(createPopupContent(lat, lng, null))
+                        .openOn(map);
+                    
+                    // Send coordinates back to PyQt if pywebchannel is available
+                    if (typeof pywebchannel !== 'undefined' && pywebchannel.onClickCoordinates) {
+                        pywebchannel.onClickCoordinates(lat, lng);
+                    }
+                    
+                    // Log to console for debugging
+                    console.log('Clicked at:', lat, lng);
+                    
+                    // Get elevation data
+                    try {
+                        const elevation = await getElevation(lat, lng);
+                        
+                        // Update popup with elevation data (buttons removed)
+                        const popupContent = createPopupContent(lat, lng, elevation);
+                        popup.setContent(popupContent);
+                        
+                        // Send elevation data to PyQt if available
+                        if (typeof pywebchannel !== 'undefined' && pywebchannel.onClickCoordinatesWithElevation) {
+                            pywebchannel.onClickCoordinatesWithElevation(lat, lng, elevation);
+                        }
+                        
+                        console.log('Elevation:', elevation, 'meters');
+                    } catch (error) {
+                        console.error('Error getting elevation:', error);
+                        popup.setContent(createPopupContent(lat, lng, false));
+                    }
+                });
+                
+                // Function to add markers (can be called from PyQt)
+                function addMarker(lat, lng, title) {
+                    return L.marker([lat, lng]).addTo(map).bindPopup(title || 'Waypoint');
+                }
+                
+                // Function to clear all markers
+                function clearMarkers() {
+                    map.eachLayer(function(layer) {
+                        if (layer instanceof L.Marker) {
+                            map.removeLayer(layer);
+                        }
+                    });
+                }
+                
+                // Function to draw a line between points
+                function drawLine(points) {
+                    let latlngs = points.map(point => [point.lat, point.lng]);
+                    return L.polyline(latlngs, {color: 'red'}).addTo(map);
+                }
+                
+                // Function to add marker with elevation
+                async function addMarkerWithElevation(lat, lng, title) {
+                    const elevation = await getElevation(lat, lng);
+                    const popupContent = createPopupContent(lat, lng, elevation);
+                    return L.marker([lat, lng]).addTo(map).bindPopup(popupContent);
+                }
+                
+
+                
+                // Takeoff/Landing selection functions
+                function startTakeoffSelection() {
+                    window.takeoffSelectionMode = true;
+                    window.landingSelectionMode = false;
+                    map.getContainer().style.cursor = 'crosshair';
+                    console.log('Takeoff selection mode activated');
+                }
+                
+                function startLandingSelection() {
+                    window.takeoffSelectionMode = false;
+                    window.landingSelectionMode = true;
+                    map.getContainer().style.cursor = 'crosshair';
+                    console.log('Landing selection mode activated');
+                }
+                
+                function setTakeoffLocation(lat, lng) {
+                    // Clear existing takeoff marker
+                    if (window.takeoffMarker) {
+                        map.removeLayer(window.takeoffMarker);
+                    }
+                    
+                    // Add new takeoff marker
+                    window.takeoffMarker = L.marker([lat, lng], {
+                        icon: L.divIcon({
+                            className: 'takeoff-marker',
+                            html: '<div style="background-color: #28a745; width: 12px; height: 12px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
+                            iconSize: [18, 18]
+                        })
+                    }).addTo(map);
+                    
+                    window.takeoffMarker.bindPopup('<b>Takeoff Location</b><br>' + lat.toFixed(6) + ', ' + lng.toFixed(6));
+                    
+                    // Reset selection mode
+                    window.takeoffSelectionMode = false;
+                    map.getContainer().style.cursor = '';
+                    
+                    // Call Python function if available
+                    if (typeof pywebchannel !== 'undefined' && pywebchannel.receive_takeoff_location) {
+                        pywebchannel.receive_takeoff_location(lat, lng);
+                    }
+                    
+                    console.log('Takeoff location set:', lat, lng);
+                }
+                
+                function setLandingLocation(lat, lng) {
+                    // Clear existing landing marker
+                    if (window.landingMarker) {
+                        map.removeLayer(window.landingMarker);
+                    }
+                    
+                    // Add new landing marker
+                    window.landingMarker = L.marker([lat, lng], {
+                        icon: L.divIcon({
+                            className: 'landing-marker',
+                            html: '<div style="background-color: #dc3545; width: 12px; height: 12px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
+                            iconSize: [18, 18]
+                        })
+                    }).addTo(map);
+                    
+                    window.landingMarker.bindPopup('<b>Landing Location</b><br>' + lat.toFixed(6) + ', ' + lng.toFixed(6));
+                    
+                    // Reset selection mode
+                    window.landingSelectionMode = false;
+                    map.getContainer().style.cursor = '';
+                    
+                    // Call Python function if available
+                    if (typeof pywebchannel !== 'undefined' && pywebchannel.receive_landing_location) {
+                        pywebchannel.receive_landing_location(lat, lng);
+                    }
+                    
+                    console.log('Landing location set:', lat, lng);
+                }
+                
+                function clearTakeoffMarker() {
+                    if (window.takeoffMarker) {
+                        map.removeLayer(window.takeoffMarker);
+                        window.takeoffMarker = null;
+                    }
+                }
+                
+                function clearLandingMarker() {
+                    if (window.landingMarker) {
+                        map.removeLayer(window.landingMarker);
+                        window.landingMarker = null;
+                    }
+                }
+                
+                // Initialize selection modes
+                window.takeoffSelectionMode = false;
+                window.landingSelectionMode = false;
+                window.takeoffMarker = null;
+                window.landingMarker = null;
+                
+                // Address Search Functionality
+                const searchInput = document.getElementById('search-input');
+                const searchButton = document.getElementById('search-button');
+                const searchResults = document.getElementById('search-results');
+                let searchMarker = null;
+                let searchTimeout = null;
+                let currentSearchResults = [];
+                
+                // Function to search for addresses using Nominatim
+                async function searchAddress(query) {
+                    try {
+                        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`);
+                        const data = await response.json();
+                        return data;
+                    } catch (error) {
+                        console.error('Error searching for address:', error);
+                        return [];
+                    }
+                }
+                
+                // Function to display search results
+                function displaySearchResults(results) {
+                    searchResults.innerHTML = '';
+                    currentSearchResults = results;
+                    
+                    if (results.length === 0) {
+                        searchResults.innerHTML = '<div class="search-result-item">No results found</div>';
+                        searchResults.style.display = 'block';
+                        return;
+                    }
+                    
+                    results.forEach((result, index) => {
+                        const resultItem = document.createElement('div');
+                        resultItem.className = 'search-result-item';
+                        resultItem.innerHTML = `
+                            <div class="search-result-title">${result.display_name.split(',')[0]}</div>
+                            <div class="search-result-address">${result.display_name}</div>
+                        `;
+                        
+                        resultItem.addEventListener('click', () => {
+                            selectSearchResult(result);
+                        });
+                        
+                        resultItem.addEventListener('mouseenter', () => {
+                            // Preview the location on map
+                            previewLocation(result);
+                        });
+                        
+                        resultItem.addEventListener('mouseleave', () => {
+                            // Remove preview marker
+                            if (searchMarker && searchMarker._preview) {
+                                map.removeLayer(searchMarker);
+                                searchMarker = null;
+                            }
+                        });
+                        
+                        searchResults.appendChild(resultItem);
+                    });
+                    
+                    searchResults.style.display = 'block';
+                }
+                
+                // Function to preview location on map
+                function previewLocation(result) {
+                    const lat = parseFloat(result.lat);
+                    const lon = parseFloat(result.lon);
+                    
+                    // Remove previous preview marker
+                    if (searchMarker && searchMarker._preview) {
+                        map.removeLayer(searchMarker);
+                    }
+                    
+                    // Add preview marker
+                    searchMarker = L.marker([lat, lon], {
+                        icon: L.divIcon({
+                            className: 'preview-marker',
+                            html: '<div style="background-color: #007bff; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
+                            iconSize: [12, 12],
+                            iconAnchor: [6, 6]
+                        })
+                    }).addTo(map);
+                    searchMarker._preview = true;
+                    
+                    // Center map on preview location
+                    map.setView([lat, lon], 16);
+                }
+                
+                // Function to select a search result
+                function selectSearchResult(result) {
+                    const lat = parseFloat(result.lat);
+                    const lon = parseFloat(result.lon);
+                    
+                    // Remove previous search marker
+                    if (searchMarker) {
+                        map.removeLayer(searchMarker);
+                    }
+                    
+                    // Add new marker at searched location
+                    searchMarker = L.marker([lat, lon])
+                        .addTo(map)
+                        .bindPopup(`<b>Searched Location:</b><br>${result.display_name}`)
+                        .openPopup();
+                    
+                    // Center map on the searched location
+                    map.setView([lat, lon], 16);
+                    
+                    // Hide search results
+                    searchResults.style.display = 'none';
+                    
+                    // Update search input with selected result
+                    searchInput.value = result.display_name;
+                }
+                
+                // Real-time search as user types (autocomplete)
+                searchInput.addEventListener('input', (event) => {
+                    const query = event.target.value.trim();
+                    
+                    // Clear previous timeout
+                    if (searchTimeout) {
+                        clearTimeout(searchTimeout);
+                    }
+                    
+                    // Hide results if input is empty
+                    if (query.length === 0) {
+                        searchResults.style.display = 'none';
+                        if (searchMarker && searchMarker._preview) {
+                            map.removeLayer(searchMarker);
+                            searchMarker = null;
+                        }
+                        return;
+                    }
+                    
+                    // Only search if query is at least 3 characters
+                    if (query.length < 3) {
+                        searchResults.style.display = 'none';
+                        return;
+                    }
+                    
+                    // Set timeout to avoid too many API calls
+                    searchTimeout = setTimeout(async () => {
+                        searchButton.textContent = 'Searching...';
+                        searchButton.disabled = true;
+                        
+                        const results = await searchAddress(query);
+                        displaySearchResults(results);
+                        
+                        searchButton.textContent = 'Search';
+                        searchButton.disabled = false;
+                    }, 300); // 300ms delay
+                });
+                
+                // Search button click handler
+                searchButton.addEventListener('click', async () => {
+                    const query = searchInput.value.trim();
+                    if (query) {
+                        searchButton.textContent = 'Searching...';
+                        searchButton.disabled = true;
+                        
+                        const results = await searchAddress(query);
+                        displaySearchResults(results);
+                        
+                        searchButton.textContent = 'Search';
+                        searchButton.disabled = false;
+                    }
+                });
+                
+                // Enter key handler for search input
+                searchInput.addEventListener('keypress', async (event) => {
+                    if (event.key === 'Enter') {
+                        const query = searchInput.value.trim();
+                        if (query) {
+                            searchButton.textContent = 'Searching...';
+                            searchButton.disabled = true;
+                            
+                            const results = await searchAddress(query);
+                            displaySearchResults(results);
+                            
+                            searchButton.textContent = 'Search';
+                            searchButton.disabled = false;
+                        }
+                    }
+                });
+                
+                // Arrow key navigation for search results
+                searchInput.addEventListener('keydown', (event) => {
+                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                        event.preventDefault();
+                        
+                        const resultItems = searchResults.querySelectorAll('.search-result-item');
+                        if (resultItems.length === 0) return;
+                        
+                        let currentIndex = -1;
+                        for (let i = 0; i < resultItems.length; i++) {
+                            if (resultItems[i].classList.contains('selected')) {
+                                currentIndex = i;
+                                break;
+                            }
+                        }
+                        
+                        if (event.key === 'ArrowDown') {
+                            currentIndex = (currentIndex + 1) % resultItems.length;
+                        } else {
+                            currentIndex = currentIndex <= 0 ? resultItems.length - 1 : currentIndex - 1;
+                        }
+                        
+                        // Remove previous selection
+                        resultItems.forEach(item => item.classList.remove('selected'));
+                        
+                        // Add selection to current item
+                        resultItems[currentIndex].classList.add('selected');
+                        
+                        // Preview the selected location
+                        if (currentSearchResults[currentIndex]) {
+                            previewLocation(currentSearchResults[currentIndex]);
+                        }
+                    } else if (event.key === 'Enter' && searchResults.style.display === 'block') {
+                        event.preventDefault();
+                        
+                        const selectedItem = searchResults.querySelector('.search-result-item.selected');
+                        if (selectedItem) {
+                            const index = Array.from(searchResults.querySelectorAll('.search-result-item')).indexOf(selectedItem);
+                            if (currentSearchResults[index]) {
+                                selectSearchResult(currentSearchResults[index]);
+                            }
+                        }
+                    }
+                });
+                
+                // Click outside search results to hide them
+                document.addEventListener('click', (event) => {
+                    if (!event.target.closest('.search-container')) {
+                        searchResults.style.display = 'none';
+                    }
+                });
+                
+                // Flight path visualization functions
+                let flightPathLayer = null;
+                let waypointMarkers = [];
+                
+                function visualizeFlightPlan(waypoints) {
+                    console.log('Visualizing flight plan with waypoints:', waypoints);
+                    
+                    // Clear existing flight path
+                    clearFlightPath();
+                    
+                    if (!waypoints || waypoints.length === 0) {
+                        console.log('No waypoints to visualize');
+                        return;
+                    }
+                    
+                    // Create waypoint markers
+                    waypointMarkers = [];
+                    waypoints.forEach((waypoint, index) => {
+                        const lat = waypoint.lat || waypoint[0];
+                        const lng = waypoint.lng || waypoint[1];
+                        const alt = waypoint.alt || waypoint[2] || 0;
+                        
+                        // Create waypoint marker
+                        const marker = L.marker([lat, lng], {
+                            icon: L.divIcon({
+                                className: 'waypoint-marker',
+                                html: `<div style="background-color: #007bff; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: bold;">${index + 1}</div>`,
+                                iconSize: [22, 22],
+                                iconAnchor: [11, 11]
+                            })
+                        }).addTo(map);
+                        
+                        // Add popup with waypoint info
+                        marker.bindPopup(`
+                            <b>Waypoint ${index + 1}</b><br>
+                            Lat: ${lat.toFixed(6)}<br>
+                            Lng: ${lng.toFixed(6)}<br>
+                            Alt: ${alt.toFixed(1)}m (${(alt * 3.28084).toFixed(1)}ft)
+                        `);
+                        
+                        waypointMarkers.push(marker);
+                    });
+                    
+                    // Create flight path line
+                    const pathCoords = waypoints.map(waypoint => [
+                        waypoint.lat || waypoint[0],
+                        waypoint.lng || waypoint[1]
+                    ]);
+                    
+                    flightPathLayer = L.polyline(pathCoords, {
+                        color: '#ff6b35',
+                        weight: 4,
+                        opacity: 0.8,
+                        dashArray: '10, 10'
+                    }).addTo(map);
+                    
+                    // Fit map to show entire flight path
+                    if (waypoints.length > 1) {
+                        const group = new L.featureGroup([flightPathLayer, ...waypointMarkers]);
+                        map.fitBounds(group.getBounds().pad(0.1));
+                    } else if (waypoints.length === 1) {
+                        map.setView([waypoints[0].lat || waypoints[0][0], waypoints[0].lng || waypoints[0][1]], 15);
+                    }
+                    
+                    console.log('Flight plan visualized successfully');
+                }
+                
+                function clearFlightPath() {
+                    // Remove flight path line
+                    if (flightPathLayer) {
+                        map.removeLayer(flightPathLayer);
+                        flightPathLayer = null;
+                    }
+                    
+                    // Remove waypoint markers
+                    waypointMarkers.forEach(marker => {
+                        map.removeLayer(marker);
+                    });
+                    waypointMarkers = [];
+                    
+                    console.log('Flight path cleared');
+                }
+                
+                function fitFlightPathBounds() {
+                    // Fit map bounds to show all waypoints
+                    if (waypointMarkers.length > 0) {
+                        const group = new L.featureGroup(waypointMarkers);
+                        map.fitBounds(group.getBounds().pad(0.1));
+                        console.log('Fitted map bounds to flight path');
+                    } else if (flightPathLayer) {
+                        map.fitBounds(flightPathLayer.getBounds().pad(0.1));
+                        console.log('Fitted map bounds to flight path line');
+                    }
+                }
+                
+                // Make functions globally available
+                window.mapFunctions = {
+                    addMarker: addMarker,
+                    addMarkerWithElevation: addMarkerWithElevation,
+                    clearMarkers: clearMarkers,
+                    drawLine: drawLine,
+                    setView: function(lat, lng, zoom) {
+                        map.setView([lat, lng], zoom || 15);
+                    },
+                    getElevation: getElevation,
+                    formatCoordinates: formatCoordinates,
+                    searchAddress: searchAddress,
+                    displaySearchResults: displaySearchResults,
+                    visualizeFlightPlan: visualizeFlightPlan,
+                    clearFlightPath: clearFlightPath,
+                    fitFlightPathBounds: fitFlightPathBounds
+                };
+                
+                // Make functions globally available
+                window.visualizeFlightPlan = visualizeFlightPlan;
+                window.clearFlightPath = clearFlightPath;
+                window.fitFlightPathBounds = fitFlightPathBounds;
+            </script>
+        </body>
+        </html>
+        

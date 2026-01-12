@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Enhanced Flight Planning Map</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    
+    <!-- QWebChannel JavaScript -->
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+        #map {
+            width: 100%;
+            height: 100vh;
+        }
+        .coordinate-popup {
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .coordinate-popup .label {
+            font-weight: bold;
+            color: #333;
+        }
+        .coordinate-popup .value {
+            color: #666;
+            font-family: 'Courier New', monospace;
+        }
+        .elevation-info {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #ccc;
+        }
+        .loading {
+            color: #999;
+            font-style: italic;
+        }
+        .error {
+            color: #d32f2f;
+            font-style: italic;
+        }
+        .flight-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+        }
+        .flight-controls button {
+            margin: 2px;
+            padding: 5px 10px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            background: #f8f9fa;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .flight-controls button:hover {
+            background: #e9ecef;
+        }
+        .flight-controls button:disabled {
+            background: #f1f3f4;
+            color: #999;
+            cursor: not-allowed;
+        }
+        .waypoint-info {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 3px;
+            padding: 5px;
+            margin: 5px 0;
+            font-size: 11px;
+        }
+        .flight-path-info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            border-radius: 3px;
+            padding: 5px;
+            margin: 5px 0;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <!-- Flight Path Controls -->
+    <div class="flight-controls">
+        <div style="font-weight: bold; margin-bottom: 5px;">Flight Path Controls</div>
+        <button id="clearPathBtn" onclick="clearFlightPath()">Clear Path</button>
+        <button id="showWaypointsBtn" onclick="toggleWaypoints()">Hide Waypoints</button>
+        <button id="showPathBtn" onclick="toggleFlightPath()">Hide Path</button>
+        <button id="fitBoundsBtn" onclick="fitFlightPathBounds()">Fit to Path</button>
+        <div id="pathInfo" style="margin-top: 10px; font-size: 10px; color: #666;"></div>
+    </div>
+    
+    <script>
+        // Initialize QWebChannel for communication with PyQt
+        let pywebchannel;
+        new QWebChannel(qt.webChannelTransport, function(channel) {
+            pywebchannel = channel.objects.pywebchannel;
+            console.log('QWebChannel initialized successfully');
+        });
+        
+        // Initialize the map
+        let map = L.map('map').setView([40.615, -75.387], 15);
+        
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            maxZoom: 19
+        });
+        
+        // Add satellite layer option
+        let satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+            maxZoom: 19
+        });
+        
+        // Add hybrid layer option
+        let hybridLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+            maxZoom: 19
+        });
+        
+        // Add hybrid labels layer
+        let hybridLabelsLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+            maxZoom: 19
+        });
+        
+        // Create layer groups
+        let baseMaps = {
+            "Street": L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                maxZoom: 19
+            }),
+            "Satellite": satelliteLayer,
+            "Hybrid": L.layerGroup([hybridLayer, hybridLabelsLayer])
+        };
+        
+        // Add layer control
+        L.control.layers(baseMaps).addTo(map);
+        
+        // Set default layer to Satellite
+        satelliteLayer.addTo(map);
+        
+        // Flight path visualization variables
+        let waypoints = [];
+        let waypointMarkers = [];
+        let flightPath = null;
+        let pathVisible = true;
+        let waypointsVisible = true;
+        
+        // Function to get elevation data
+        async function getElevation(lat, lng) {
+            try {
+                const response = await fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lng}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.length > 0) {
+                    return data.results[0].elevation;
+                } else {
+                    throw new Error('No elevation data available');
+                }
+            } catch (error) {
+                console.error('Error fetching elevation:', error);
+                return null;
+            }
+        }
+        
+        // Function to format coordinates
+        function formatCoordinates(lat, lng) {
+            const latDeg = Math.floor(Math.abs(lat));
+            const latMin = (Math.abs(lat) - latDeg) * 60;
+            const latSec = (latMin - Math.floor(latMin)) * 60;
+            const latDir = lat >= 0 ? 'N' : 'S';
+            
+            const lngDeg = Math.floor(Math.abs(lng));
+            const lngMin = (Math.abs(lng) - lngDeg) * 60;
+            const lngSec = (lngMin - Math.floor(lngMin)) * 60;
+            const lngDir = lng >= 0 ? 'E' : 'W';
+            
+            return {
+                decimal: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+                dms: `${latDeg}°${Math.floor(latMin)}'${latSec.toFixed(2)}"${latDir}, ${lngDeg}°${Math.floor(lngMin)}'${lngSec.toFixed(2)}"${lngDir}`
+            };
+        }
+        
+        // Function to create popup content
+        function createPopupContent(lat, lng, elevation = null) {
+            const coords = formatCoordinates(lat, lng);
+            let elevationHtml = '';
+            
+            if (elevation !== null) {
+                elevationHtml = `
+                    <div class="elevation-info">
+                        <div class="label">Elevation:</div>
+                        <div class="value">${elevation.toFixed(1)} meters (${(elevation * 3.28084).toFixed(1)} feet)</div>
+                    </div>
+                `;
+            } else if (elevation === null) {
+                elevationHtml = `
+                    <div class="elevation-info">
+                        <div class="loading">Loading elevation data...</div>
+                    </div>
+                `;
+            } else {
+                elevationHtml = `
+                    <div class="elevation-info">
+                        <div class="error">Elevation data unavailable</div>
+                    </div>
+                `;
+            }
+            
+            return `
+                <div class="coordinate-popup">
+                    <div class="label">Decimal Coordinates:</div>
+                    <div class="value">${coords.decimal}</div>
+                    <div class="label">DMS Coordinates:</div>
+                    <div class="value">${coords.dms}</div>
+                    ${elevationHtml}
+                </div>
+            `;
+        }
+        
+        // Function to calculate distance between two points
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371000; // Earth's radius in meters
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+        
+        // Function to add waypoint to flight path
+        function addWaypoint(lat, lng, title = null, altitude = null) {
+            const waypoint = {
+                lat: lat,
+                lng: lng,
+                title: title || `Waypoint ${waypoints.length + 1}`,
+                altitude: altitude
+            };
+            
+            waypoints.push(waypoint);
+            
+            // Create custom waypoint icon
+            const waypointIcon = L.divIcon({
+                className: 'waypoint-marker',
+                html: `<div style="background: #4CAF50; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold;">${waypoints.length}</div>`,
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            });
+            
+            // Create popup content for waypoint
+            let popupContent = `
+                <div class="waypoint-info">
+                    <strong>${waypoint.title}</strong><br>
+                    <small>Coordinates: ${lat.toFixed(6)}, ${lng.toFixed(6)}</small>
+            `;
+            
+            if (altitude !== null) {
+                popupContent += `<br><small>Altitude: ${altitude} meters</small>`;
+            }
+            
+            popupContent += `</div>`;
+            
+            // Add marker to map
+            const marker = L.marker([lat, lng], {icon: waypointIcon})
+                .addTo(map)
+                .bindPopup(popupContent);
+            
+            waypointMarkers.push(marker);
+            
+            // Update flight path
+            updateFlightPath();
+            
+            // Update path info
+            updatePathInfo();
+            
+            return waypoint;
+        }
+        
+        // Enhanced function to update flight path visualization
+        function updateFlightPath() {
+            // Remove existing flight path
+            if (flightPath) {
+                map.removeLayer(flightPath);
+            }
+            
+            if (waypoints.length >= 2) {
+                // Create path coordinates
+                const pathCoords = waypoints.map(wp => [wp.lat, wp.lng]);
+                
+                // Determine path color based on mission type or waypoint count
+                let pathColor = '#FF6B35'; // Default orange
+                let pathWeight = 4;
+                let pathOpacity = 0.8;
+                
+                // Check if this is a loaded plan file (more waypoints typically)
+                if (waypoints.length > 20) {
+                    pathColor = '#9C27B0'; // Purple for complex missions
+                    pathWeight = 3;
+                } else if (waypoints.length > 10) {
+                    pathColor = '#2196F3'; // Blue for medium missions
+                    pathWeight = 3;
+                }
+                
+                // Create flight path with enhanced styling
+                flightPath = L.polyline(pathCoords, {
+                    color: pathColor,
+                    weight: pathWeight,
+                    opacity: pathOpacity,
+                    dashArray: '10, 5'
+                }).addTo(map);
+                
+                // Add arrow markers to show direction (only for shorter paths to avoid clutter)
+                if (pathCoords.length <= 15) {
+                    for (let i = 0; i < pathCoords.length - 1; i++) {
+                        const midLat = (pathCoords[i][0] + pathCoords[i + 1][0]) / 2;
+                        const midLng = (pathCoords[i][1] + pathCoords[i + 1][1]) / 2;
+                        
+                        const arrowIcon = L.divIcon({
+                            className: 'flight-arrow',
+                            html: `<div style="background: ${pathColor}; color: white; border-radius: 50%; width: 12px; height: 12px; display: flex; align-items: center; justify-content: center; font-size: 8px;">→</div>`,
+                            iconSize: [12, 12],
+                            iconAnchor: [6, 6]
+                        });
+                    
+                    L.marker([midLat, midLng], {icon: arrowIcon}).addTo(map);
+                }
+            }
+        }
+        
+        // Function to update path information
+        function updatePathInfo() {
+            const pathInfo = document.getElementById('pathInfo');
+            if (waypoints.length === 0) {
+                pathInfo.innerHTML = 'No waypoints added';
+                return;
+            }
+            
+            let totalDistance = 0;
+            for (let i = 1; i < waypoints.length; i++) {
+                totalDistance += calculateDistance(
+                    waypoints[i-1].lat, waypoints[i-1].lng,
+                    waypoints[i].lat, waypoints[i].lng
+                );
+            }
+            
+            const distanceKm = (totalDistance / 1000).toFixed(2);
+            const distanceMiles = (totalDistance / 1609.34).toFixed(2);
+            
+            pathInfo.innerHTML = `
+                <strong>Flight Path Info:</strong><br>
+                Waypoints: ${waypoints.length}<br>
+                Distance: ${distanceKm} km (${distanceMiles} mi)
+            `;
+        }
+        
+        // Function to clear flight path
+        function clearFlightPath() {
+            // Remove all waypoint markers
+            waypointMarkers.forEach(marker => map.removeLayer(marker));
+            waypointMarkers = [];
+            
+            // Remove flight path
+            if (flightPath) {
+                map.removeLayer(flightPath);
+                flightPath = null;
+            }
+            
+            // Clear waypoints array
+            waypoints = [];
+            
+            // Update path info
+            updatePathInfo();
+            
+            // Notify PyQt
+            if (typeof pywebchannel !== 'undefined' && pywebchannel.onFlightPathCleared) {
+                pywebchannel.onFlightPathCleared();
+            }
+        }
+        
+        // Function to toggle waypoints visibility
+        function toggleWaypoints() {
+            waypointsVisible = !waypointsVisible;
+            const btn = document.getElementById('showWaypointsBtn');
+            
+            waypointMarkers.forEach(marker => {
+                if (waypointsVisible) {
+                    marker.addTo(map);
+                    btn.textContent = 'Hide Waypoints';
+                } else {
+                    map.removeLayer(marker);
+                    btn.textContent = 'Show Waypoints';
+                }
+            });
+        }
+        
+        // Function to toggle flight path visibility
+        function toggleFlightPath() {
+            pathVisible = !pathVisible;
+            const btn = document.getElementById('showPathBtn');
+            
+            if (flightPath) {
+                if (pathVisible) {
+                    flightPath.addTo(map);
+                    btn.textContent = 'Hide Path';
+                } else {
+                    map.removeLayer(flightPath);
+                    btn.textContent = 'Show Path';
+                }
+            }
+        }
+        
+        // Function to fit map to flight path bounds
+        function fitFlightPathBounds() {
+            if (waypoints.length === 0) return;
+            
+            const bounds = L.latLngBounds(waypoints.map(wp => [wp.lat, wp.lng]));
+            map.fitBounds(bounds, {padding: [20, 20]});
+        }
+        
+        // Enhanced function to visualize flight plan from Python
+        function visualizeFlightPlan(flightPlanData) {
+            // Clear existing path
+            clearFlightPath();
+            
+            if (!flightPlanData || !flightPlanData.waypoints) {
+                console.error('Invalid flight plan data');
+                return;
+            }
+            
+            // Add mission type info
+            if (flightPlanData.mission_type) {
+                console.log(`Visualizing ${flightPlanData.mission_type} with ${flightPlanData.waypoints.length} waypoints`);
+            }
+            
+            // Clear and populate the global waypoints array
+            waypoints = [];
+            
+            // Add waypoints with enhanced styling
+            flightPlanData.waypoints.forEach((waypoint, index) => {
+                let iconColor = '#4CAF50'; // Default green
+                let iconText = index + 1;
+                
+                // Customize icons based on waypoint type
+                if (waypoint.type === 'takeoff') {
+                    iconColor = '#2196F3'; // Blue
+                    iconText = 'T';
+                } else if (waypoint.type === 'landing') {
+                    iconColor = '#F44336'; // Red
+                    iconText = 'L';
+                } else if (waypoint.type === 'patrol_point') {
+                    iconColor = '#FF9800'; // Orange
+                    iconText = 'P';
+                }
+                
+                // Create custom waypoint icon
+                const waypointIcon = L.divIcon({
+                    className: 'waypoint-marker',
+                    html: `<div style="background: ${iconColor}; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">${iconText}</div>`,
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 12]
+                });
+                
+                // Create enhanced popup content
+                let popupContent = `
+                    <div class="waypoint-info">
+                        <strong>${waypoint.title}</strong><br>
+                        <small>Coordinates: ${waypoint.lat.toFixed(6)}, ${waypoint.lng.toFixed(6)}</small>
+                `;
+                
+                if (waypoint.altitude !== null) {
+                    popupContent += `<br><small>Altitude: ${waypoint.altitude} meters AGL</small>`;
+                }
+                
+                if (waypoint.amsl_altitude !== null) {
+                    popupContent += `<br><small>AMSL: ${waypoint.amsl_altitude.toFixed(1)} meters</small>`;
+                }
+                
+                if (waypoint.terrain_elevation !== null) {
+                    popupContent += `<br><small>Terrain: ${waypoint.terrain_elevation.toFixed(1)} meters</small>`;
+                }
+                
+                popupContent += `</div>`;
+                
+                // Add marker to map
+                const marker = L.marker([waypoint.lat, waypoint.lng], {icon: waypointIcon})
+                    .addTo(map)
+                    .bindPopup(popupContent);
+                
+                waypointMarkers.push(marker);
+                
+                // Also add to global waypoints array for other functions
+                waypoints.push({
+                    lat: waypoint.lat,
+                    lng: waypoint.lng,
+                    title: waypoint.title,
+                    altitude: waypoint.altitude
+                });
+            });
+            
+            // Update flight path with enhanced styling
+            updateFlightPath();
+            
+            // Fit to bounds
+            fitFlightPathBounds();
+            
+            console.log('Enhanced flight plan visualized:', flightPlanData);
+        }
+        
+        // Click listener to get coordinates and elevation
+        map.on('click', async function(event) {
+            const lat = event.latlng.lat;
+            const lng = event.latlng.lng;
+            
+            // Create initial popup with loading elevation
+            const popup = L.popup()
+                .setLatLng([lat, lng])
+                .setContent(createPopupContent(lat, lng, null))
+                .openOn(map);
+            
+            // Send coordinates back to PyQt if pywebchannel is available
+            if (typeof pywebchannel !== 'undefined' && pywebchannel.onClickCoordinates) {
+                pywebchannel.onClickCoordinates(lat, lng);
+            }
+            
+            // Log to console for debugging
+            console.log('Clicked at:', lat, lng);
+            
+            // Get elevation data
+            try {
+                const elevation = await getElevation(lat, lng);
+                
+                // Update popup with elevation data
+                popup.setContent(createPopupContent(lat, lng, elevation));
+                
+                // Send elevation data to PyQt if available
+                if (typeof pywebchannel !== 'undefined' && pywebchannel.onClickCoordinatesWithElevation) {
+                    pywebchannel.onClickCoordinatesWithElevation(lat, lng, elevation);
+                }
+                
+                console.log('Elevation:', elevation, 'meters');
+            } catch (error) {
+                console.error('Error getting elevation:', error);
+                popup.setContent(createPopupContent(lat, lng, false));
+            }
+        });
+        
+        // Function to add markers (can be called from PyQt)
+        function addMarker(lat, lng, title) {
+            return L.marker([lat, lng]).addTo(map).bindPopup(title || 'Waypoint');
+        }
+        
+        // Function to clear all markers
+        function clearMarkers() {
+            map.eachLayer(function(layer) {
+                if (layer instanceof L.Marker) {
+                    map.removeLayer(layer);
+                }
+            });
+        }
+        
+        // Function to draw a line between points
+        function drawLine(points) {
+            let latlngs = points.map(point => [point.lat, point.lng]);
+            return L.polyline(latlngs, {color: 'red'}).addTo(map);
+        }
+        
+        // Function to add marker with elevation
+        async function addMarkerWithElevation(lat, lng, title) {
+            const elevation = await getElevation(lat, lng);
+            const popupContent = createPopupContent(lat, lng, elevation);
+            return L.marker([lat, lng]).addTo(map).bindPopup(popupContent);
+        }
+        
+        // Function to set coordinates as start location
+        function setAsStartLocation(lat, lng) {
+            console.log('Setting as start location:', lat, lng);
+            if (typeof pywebchannel !== 'undefined' && pywebchannel.setStartLocation) {
+                pywebchannel.setStartLocation(lat, lng);
+            } else {
+                console.error('pywebchannel or setStartLocation not available');
+            }
+            map.closePopup();
+        }
+        
+        // Function to set coordinates as end location
+        function setAsEndLocation(lat, lng) {
+            console.log('Setting as end location:', lat, lng);
+            if (typeof pywebchannel !== 'undefined' && pywebchannel.setEndLocation) {
+                pywebchannel.setEndLocation(lat, lng);
+            } else {
+                console.error('pywebchannel or setEndLocation not available');
+            }
+            map.closePopup();
+        }
+        
+        // Make functions globally available
+        window.mapFunctions = {
+            addMarker: addMarker,
+            addMarkerWithElevation: addMarkerWithElevation,
+            clearMarkers: clearMarkers,
+            drawLine: drawLine,
+            setView: function(lat, lng, zoom) {
+                map.setView([lat, lng], zoom || 15);
+            },
+            getElevation: getElevation,
+            formatCoordinates: formatCoordinates,
+            setAsStartLocation: setAsStartLocation,
+            setAsEndLocation: setAsEndLocation,
+            addWaypoint: addWaypoint,
+            clearFlightPath: clearFlightPath,
+            visualizeFlightPlan: visualizeFlightPlan,
+            updateFlightPath: updateFlightPath,
+            fitFlightPathBounds: fitFlightPathBounds,
+            getWaypoints: function() { return waypoints; },
+            getFlightPathData: function() {
+                return {
+                    waypoints: waypoints,
+                    totalDistance: calculateTotalDistance(),
+                    waypointCount: waypoints.length
+                };
+            }
+        };
+        
+        // Helper function to calculate total distance
+        function calculateTotalDistance() {
+            let totalDistance = 0;
+            for (let i = 1; i < waypoints.length; i++) {
+                totalDistance += calculateDistance(
+                    waypoints[i-1].lat, waypoints[i-1].lng,
+                    waypoints[i].lat, waypoints[i].lng
+                );
+            }
+            return totalDistance;
+        }
+        
+        // Initialize path info
+        updatePathInfo();
+        
+        // ===== PLAN VISUALIZATION FUNCTIONS (from MapsolutionLocal) =====
+        
+        // Store map references globally for plan visualization
+        window.qgcMap = map;
+        window.qgcMarkers = [];
+        window.qgcPath = null;
+        window.qgcGeofence = null;
+        
+        // Function to update map with mission data (from MapsolutionLocal)
+        window.updateMissionData = function(missionData) {
+            // Clear existing markers
+            window.qgcMarkers.forEach(marker => map.removeLayer(marker));
+            window.qgcMarkers = [];
+            
+            if (window.qgcPath) {
+                map.removeLayer(window.qgcPath);
+                window.qgcPath = null;
+            }
+            
+            if (window.qgcGeofence) {
+                map.removeLayer(window.qgcGeofence);
+                window.qgcGeofence = null;
+            }
+            
+            if (missionData.waypoints && missionData.waypoints.length > 0) {
+                // Add waypoints
+                var pathCoords = [];
+                
+                missionData.waypoints.forEach(function(wp, index) {
+                    // Create custom icon (from MapsolutionLocal)
+                    var iconHtml = '<div style="background: #e74c3c; border: 2px solid white; border-radius: 50%; width: 30px; height: 30px; display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 2px 5px rgba(0,0,0,0.3); font-family: Segoe UI, sans-serif; font-weight: bold; color: white; font-size: 12px; line-height: 1;"><div>' + (index + 1) + '</div><div style="font-size: 8px;">' + Math.round(wp.alt) + 'm</div></div>';
+                    
+                    var customIcon = L.divIcon({
+                        html: iconHtml,
+                        iconSize: [30, 30],
+                        iconAnchor: [15, 15]
+                    });
+                    
+                    var marker = L.marker([wp.lat, wp.lng], {icon: customIcon})
+                        .bindPopup('<div style="font-family: Segoe UI, sans-serif;"><h3 style="color: #2c3e50; margin: 0 0 10px 0;">Waypoint ' + (index + 1) + '</h3><p style="margin: 5px 0;"><strong>Command:</strong> ' + wp.command_name + '</p><p style="margin: 5px 0;"><strong>Position:</strong> ' + wp.lat.toFixed(6) + ', ' + wp.lng.toFixed(6) + '</p><p style="margin: 5px 0;"><strong>Altitude:</strong> ' + wp.alt.toFixed(1) + ' m</p><p style="margin: 5px 0;"><strong>AMSL Alt Above Terrain:</strong> ' + wp.amsl_alt + '</p><p style="margin: 5px 0;"><strong>Altitude Mode:</strong> ' + wp.altitude_mode + '</p><p style="margin: 5px 0;"><strong>Frame:</strong> ' + wp.frame + '</p></div>');
+                    
+                    marker.addTo(map);
+                    window.qgcMarkers.push(marker);
+                    pathCoords.push([wp.lat, wp.lng]);
+                });
+                
+                // Add flight path
+                if (pathCoords.length > 1) {
+                    window.qgcPath = L.polyline(pathCoords, {
+                        color: '#e74c3c',
+                        weight: 3,
+                        opacity: 0.8,
+                        dashArray: '10, 5'
+                    }).addTo(map);
+                    
+                    window.qgcPath.bindPopup('<div class="waypoint-popup"><h3>Mission Path</h3><p><strong>Total Waypoints:</strong> ' + missionData.waypoints.length + '</p></div>');
+                }
+                
+                // Add geofence
+                if (missionData.geofence && missionData.geofence.length > 0) {
+                    missionData.geofence.forEach(function(polygon, index) {
+                        if (polygon.length > 2) {
+                            var geofencePolygon = L.polygon(polygon, {
+                                color: '#f39c12',
+                                weight: 2,
+                                opacity: 0.8,
+                                fillColor: '#f39c12',
+                                fillOpacity: 0.1
+                            }).addTo(map);
+                            
+                            geofencePolygon.bindPopup('<div class="waypoint-popup"><h3>Geofence ' + (index + 1) + '</h3><p><strong>Type:</strong> Polygon</p><p><strong>Vertices:</strong> ' + polygon.length + '</p></div>');
+                            window.qgcGeofence = geofencePolygon;
+                        }
+                    });
+                }
+                
+                // Add rally points
+                if (missionData.rally_points && missionData.rally_points.length > 0) {
+                    missionData.rally_points.forEach(function(rally_point, index) {
+                        var rallyMarker = L.marker([rally_point.lat, rally_point.lng], {
+                            icon: L.icon({
+                                iconUrl: 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="purple"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>'),
+                                iconSize: [25, 25],
+                                iconAnchor: [12, 12]
+                            })
+                        }).bindPopup('<div class="waypoint-popup"><h3>Rally Point ' + (index + 1) + '</h3><p><strong>ID:</strong> ' + rally_point.id + '</p><p><strong>Position:</strong> ' + rally_point.lat.toFixed(6) + ', ' + rally_point.lng.toFixed(6) + '</p><p><strong>Altitude:</strong> ' + rally_point.alt.toFixed(1) + ' m</p></div>');
+                        
+                        rallyMarker.addTo(map);
+                        window.qgcMarkers.push(rallyMarker);
+                    });
+                }
+                
+                // Fit map to waypoints
+                var group = new L.featureGroup(window.qgcMarkers);
+                map.fitBounds(group.getBounds().pad(0.1));
+            }
+        };
+        
+        // Function to clear plan visualization
+        window.clearPlanVisualization = function() {
+            // Clear existing markers
+            if (window.qgcMarkers) {
+                window.qgcMarkers.forEach(marker => map.removeLayer(marker));
+                window.qgcMarkers = [];
+            }
+            
+            // Clear path
+            if (window.qgcPath) {
+                map.removeLayer(window.qgcPath);
+                window.qgcPath = null;
+            }
+            
+            // Clear geofence
+            if (window.qgcGeofence) {
+                map.removeLayer(window.qgcGeofence);
+                window.qgcGeofence = null;
+            }
+        };
+        
+        // Add plan visualization functions to global map functions
+        window.mapFunctions.updateMissionData = window.updateMissionData;
+        window.mapFunctions.clearPlanVisualization = window.clearPlanVisualization;
+        
+    </script>
+</body>
+</html> 

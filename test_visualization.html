@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Flight Path Visualization</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { width: 100%; height: 100vh; }
+        .test-controls { position: absolute; top: 10px; left: 10px; z-index: 1000; background: white; padding: 10px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div class="test-controls">
+        <button onclick="testVisualization()">Test Visualization</button>
+        <button onclick="clearFlightPath()">Clear Path</button>
+    </div>
+
+    <script>
+        // Initialize map
+        const map = L.map('map').setView([40.615, -75.385], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+        // Flight path visualization variables
+        let waypoints = [];
+        let waypointMarkers = [];
+        let flightPath = null;
+
+        // Test data
+        const testFlightPlan = {
+            "waypoints": [
+                {
+                    "lat": 40.615321,
+                    "lng": -75.388227,
+                    "altitude": 100,
+                    "amsl_altitude": 169,
+                    "terrain_elevation": 69,
+                    "title": "Takeoff",
+                    "type": "takeoff"
+                },
+                {
+                    "lat": 40.614694,
+                    "lng": -75.387423,
+                    "altitude": 100,
+                    "amsl_altitude": 166,
+                    "terrain_elevation": 66,
+                    "title": "Waypoint 1",
+                    "type": "waypoint"
+                },
+                {
+                    "lat": 40.614067,
+                    "lng": -75.386663,
+                    "altitude": 100,
+                    "amsl_altitude": 171,
+                    "terrain_elevation": 71,
+                    "title": "Waypoint 2",
+                    "type": "waypoint"
+                },
+                {
+                    "lat": 40.602785,
+                    "lng": -75.372979,
+                    "altitude": 0,
+                    "amsl_altitude": 264,
+                    "terrain_elevation": 264,
+                    "title": "Landing",
+                    "type": "landing"
+                }
+            ],
+            "mission_type": "Test Delivery Route",
+            "total_waypoints": 4
+        };
+
+        function clearFlightPath() {
+            // Remove all waypoint markers
+            waypointMarkers.forEach(marker => map.removeLayer(marker));
+            waypointMarkers = [];
+            
+            // Remove flight path
+            if (flightPath) {
+                map.removeLayer(flightPath);
+                flightPath = null;
+            }
+            
+            // Clear waypoints array
+            waypoints = [];
+            
+            console.log('Flight path cleared');
+        }
+
+        function fitFlightPathBounds() {
+            if (waypoints.length === 0) return;
+            
+            const bounds = L.latLngBounds(waypoints.map(wp => [wp.lat, wp.lng]));
+            map.fitBounds(bounds, {padding: [20, 20]});
+        }
+
+        function updateFlightPath() {
+            // Remove existing flight path
+            if (flightPath) {
+                map.removeLayer(flightPath);
+            }
+            
+            if (waypoints.length >= 2) {
+                // Create path coordinates
+                const pathCoords = waypoints.map(wp => [wp.lat, wp.lng]);
+                
+                // Create flight path with custom styling
+                flightPath = L.polyline(pathCoords, {
+                    color: '#FF6B35',
+                    weight: 4,
+                    opacity: 0.8,
+                    dashArray: '10, 5'
+                }).addTo(map);
+            }
+        }
+
+        function visualizeFlightPlan(flightPlanData) {
+            // Clear existing path
+            clearFlightPath();
+            
+            if (!flightPlanData || !flightPlanData.waypoints) {
+                console.error('Invalid flight plan data');
+                return;
+            }
+            
+            // Add mission type info
+            if (flightPlanData.mission_type) {
+                console.log(`Visualizing ${flightPlanData.mission_type} with ${flightPlanData.waypoints.length} waypoints`);
+            }
+            
+            // Clear and populate the global waypoints array
+            waypoints = [];
+            
+            // Add waypoints with enhanced styling
+            flightPlanData.waypoints.forEach((waypoint, index) => {
+                let iconColor = '#4CAF50'; // Default green
+                let iconText = index + 1;
+                
+                // Customize icons based on waypoint type
+                if (waypoint.type === 'takeoff') {
+                    iconColor = '#2196F3'; // Blue
+                    iconText = 'T';
+                } else if (waypoint.type === 'landing') {
+                    iconColor = '#F44336'; // Red
+                    iconText = 'L';
+                } else if (waypoint.type === 'patrol_point') {
+                    iconColor = '#FF9800'; // Orange
+                    iconText = 'P';
+                }
+                
+                // Create custom waypoint icon
+                const waypointIcon = L.divIcon({
+                    className: 'waypoint-marker',
+                    html: `<div style="background: ${iconColor}; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">${iconText}</div>`,
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 12]
+                });
+                
+                // Create enhanced popup content
+                let popupContent = `
+                    <div class="waypoint-info">
+                        <strong>${waypoint.title}</strong><br>
+                        <small>Coordinates: ${waypoint.lat.toFixed(6)}, ${waypoint.lng.toFixed(6)}</small>
+                `;
+                
+                if (waypoint.altitude !== null) {
+                    popupContent += `<br><small>Altitude: ${waypoint.altitude} meters AGL</small>`;
+                }
+                
+                if (waypoint.amsl_altitude !== null) {
+                    popupContent += `<br><small>AMSL: ${waypoint.amsl_altitude.toFixed(1)} meters</small>`;
+                }
+                
+                if (waypoint.terrain_elevation !== null) {
+                    popupContent += `<br><small>Terrain: ${waypoint.terrain_elevation.toFixed(1)} meters</small>`;
+                }
+                
+                popupContent += `</div>`;
+                
+                // Add marker to map
+                const marker = L.marker([waypoint.lat, waypoint.lng], {icon: waypointIcon})
+                    .addTo(map)
+                    .bindPopup(popupContent);
+                
+                waypointMarkers.push(marker);
+                
+                // Also add to global waypoints array for other functions
+                waypoints.push({
+                    lat: waypoint.lat,
+                    lng: waypoint.lng,
+                    title: waypoint.title,
+                    altitude: waypoint.altitude
+                });
+            });
+            
+            // Update flight path with enhanced styling
+            updateFlightPath();
+            
+            // Fit to bounds
+            fitFlightPathBounds();
+            
+            console.log('Enhanced flight plan visualized:', flightPlanData);
+        }
+
+        function testVisualization() {
+            console.log('Testing visualization...');
+            visualizeFlightPlan(testFlightPlan);
+        }
+
+        // Test on page load
+        window.onload = function() {
+            console.log('Test page loaded');
+        };
+    </script>
+</body>
+</html>
+

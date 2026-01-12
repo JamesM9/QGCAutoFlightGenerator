@@ -1,0 +1,26 @@
+{
+  "aircraft_configurations": {
+    "f096138f-b89b-428f-acc3-b48beea591e0": {
+      "id": "f096138f-b89b-428f-acc3-b48beea591e0",
+      "name": "Imported Fixedwing.params",
+      "description": "Configuration imported from Fixedwing.params",
+      "firmware_type": "px4",
+      "vehicle_type": "multicopter",
+      "parameter_file": "Fixedwing.params",
+      "parameters": {
+        "1": "1\tVT_B_REV_DEL\t0.0\t9"
+      },
+      "flight_characteristics": {
+        "max_speed": 5.0,
+        "max_climb_rate": 3.0,
+        "max_descent_rate": 1.0,
+        "waypoint_radius": 2.0,
+        "turn_radius": 5.0
+      },
+      "created_date": "2025-09-06T18:03:47.624026",
+      "last_modified": "2025-09-06T18:03:47.624026"
+    }
+  },
+  "parameter_files": {},
+  "active_configuration": "f096138f-b89b-428f-acc3-b48beea591e0"
+}
